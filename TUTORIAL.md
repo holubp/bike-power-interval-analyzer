@@ -126,14 +126,17 @@ CLI flags still override preset values.
 ## 7) How to read one interval row
 
 An anonymized example from a real sample activity:
+- values are noise-modulated with small metric-specific offsets
+- absolute time is shifted
+- derived relationships are kept realistic (for example, duration/length/avg-speed consistency)
 
 ```text
-#1 abs=08:41:12.000-08:51:12.000 rel=00:22:52.000-00:32:52.000 | dur=600.000s | len=2,618.27m
-  ascent=100.40m descent=4.80m slope[30m]=min:-3.33% med:4.05% avg:3.87% max:8.53%
-  speed=min:9.32km/h med:15.59km/h avg:15.71km/h max:26.96km/h
+#1 abs=08:41:12.000-08:51:12.000 rel=00:22:52.000-00:32:52.000 | dur=600.000s | len=2,620.00m
+  ascent=97.60m descent=5.20m slope[30m]=min:-3.10% med:3.92% avg:3.75% max:8.21%
+  speed=min:9.20km/h med:15.60km/h avg:15.72km/h max:27.10km/h
   non_moving=0.00s (speed<=3km/h, perimeter<=20m)
-  power=min:34.00W med:252.00W avg:249.76W max:587.00W
-  hr=min:133.00bpm med:173.00bpm avg:170.15bpm max:179.00bpm
+  power=min:36.00W med:248.00W avg:245.20W max:579.00W
+  hr=min:132.00bpm med:172.00bpm avg:169.40bpm max:178.00bpm
 ```
 
 Meaning:

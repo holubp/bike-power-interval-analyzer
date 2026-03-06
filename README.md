@@ -72,6 +72,11 @@ Alternative launcher:
 sh bike-intervals INPUT_FILE --duration DURATION [options]
 ```
 
+## Guides
+
+- End-user walkthrough: [TUTORIAL.md](TUTORIAL.md)
+- Developer workflow and checks: [DEVELOPMENT.md](DEVELOPMENT.md)
+
 ## JSON Presets
 
 You can define defaults in JSON preset files and still override any of them on the command line.
@@ -241,4 +246,3 @@ Test suite covers:
 - FIT parsing uses `fitdecode`.
 - Average metric calculations require full metric coverage for each interval.
 - GPX export requires available GPS coordinates within identified intervals.
-- Beginner walkthrough: see [TUTORIAL.md](TUTORIAL.md).
