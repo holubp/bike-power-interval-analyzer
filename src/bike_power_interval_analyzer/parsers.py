@@ -116,14 +116,38 @@ def parse_fit(path: Path) -> ActivityData:
         ) from exc
 
     raw_points: list[dict[str, Any]] = []
+    hr_zone_tabs: set[float] = set()
+    power_zone_tabs: set[float] = set()
     try:
         with fitdecode.FitReader(path.as_posix()) as fit:
             for frame in fit:
                 if not isinstance(frame, fitdecode.FitDataMessage):
                     continue
+                fields = {f.name: f.value for f in frame.fields}
+
+                if frame.name == "hr_zone":
+                    high_hr = _first_float(fields, ("high_bpm", "high_hr", "high_value"))
+                    if high_hr is not None:
+                        hr_zone_tabs.add(high_hr)
+                    continue
+
+                if frame.name == "power_zone":
+                    high_power = _first_float(fields, ("high_value", "high_power"))
+                    if high_power is not None:
+                        power_zone_tabs.add(high_power)
+                    continue
+
+                if frame.name == "time_in_zone":
+                    _add_zone_tabs_from_sequence(
+                        hr_zone_tabs, fields.get("hr_zone_high_boundary")
+                    )
+                    _add_zone_tabs_from_sequence(
+                        power_zone_tabs, fields.get("power_zone_high_boundary")
+                    )
+                    continue
+
                 if frame.name != "record":
                     continue
-                fields = {f.name: f.value for f in frame.fields}
                 timestamp = fields.get("timestamp")
                 if timestamp is None:
                     continue
@@ -156,10 +180,20 @@ def parse_fit(path: Path) -> ActivityData:
         raise RuntimeError(
             f"FIT file requires at least 2 timed record points, found {len(raw_points)} in {path}"
         )
-    return _normalize_points(path.as_posix(), raw_points)
+    return _normalize_points(
+        path.as_posix(),
+        raw_points,
+        heart_rate_zone_tabs_bpm=_sorted_zone_tabs(hr_zone_tabs),
+        power_zone_tabs_w=_sorted_zone_tabs(power_zone_tabs),
+    )
 
 
-def _normalize_points(source_path: str, raw_points: list[dict[str, Any]]) -> ActivityData:
+def _normalize_points(
+    source_path: str,
+    raw_points: list[dict[str, Any]],
+    heart_rate_zone_tabs_bpm: tuple[float, ...] | None = None,
+    power_zone_tabs_w: tuple[float, ...] | None = None,
+) -> ActivityData:
     if len(raw_points) < 2:
         raise RuntimeError("At least two points are required for interval analysis.")
     raw_points.sort(key=lambda p: p["timestamp"])
@@ -208,6 +242,8 @@ def _normalize_points(source_path: str, raw_points: list[dict[str, Any]]) -> Act
         source_path=source_path,
         start_time=start_time,
         points=tuple(points),
+        heart_rate_zone_tabs_bpm=heart_rate_zone_tabs_bpm,
+        power_zone_tabs_w=power_zone_tabs_w,
     )
 
 
@@ -278,3 +314,36 @@ def _semicircle_to_deg(value: Any) -> float | None:
     if value is None:
         return None
     return float(value) * (180.0 / 2147483648.0)
+
+
+def _first_float(fields: dict[str, Any], names: tuple[str, ...]) -> float | None:
+    for name in names:
+        if name not in fields:
+            continue
+        value = _to_float(fields[name])
+        if value is not None:
+            return value
+    return None
+
+
+def _sorted_zone_tabs(values: set[float]) -> tuple[float, ...] | None:
+    if not values:
+        return None
+    filtered = [value for value in values if value > 0]
+    if not filtered:
+        return None
+    return tuple(sorted(filtered))
+
+
+def _add_zone_tabs_from_sequence(target: set[float], raw: Any) -> None:
+    if raw is None:
+        return
+    if not isinstance(raw, (list, tuple)):
+        value = _to_float(raw)
+        if value is not None:
+            target.add(value)
+        return
+    for item in raw:
+        value = _to_float(item)
+        if value is not None:
+            target.add(value)

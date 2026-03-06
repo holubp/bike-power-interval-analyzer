@@ -5,6 +5,7 @@ from __future__ import annotations
 from bisect import bisect_left, bisect_right
 from dataclasses import dataclass
 from datetime import timedelta
+import math
 from typing import Iterable
 
 from .models import ActivityData, DataPoint, IntervalStats, IntervalWindow
@@ -35,6 +36,13 @@ def identify_top_intervals(
     count: int,
     analyzed_metric: str,
     inner_interval_lengths_s: Iterable[float],
+    slope_window_m: float = 30.0,
+    hr_zone_tabs_bpm: Iterable[float] | None = None,
+    power_zone_tabs_w: Iterable[float] | None = None,
+    hr_hist_bins: int | None = None,
+    power_hist_bins: int | None = None,
+    non_moving_speed_threshold_kmh: float = 3.0,
+    non_moving_perimeter_m: float = 20.0,
 ) -> list[IntervalStats]:
     """Identify highest-average intervals for one metric.
 
@@ -45,6 +53,13 @@ def identify_top_intervals(
         count: Maximum number of intervals to return.
         analyzed_metric: Either ``"power"`` or ``"heart_rate"``.
         inner_interval_lengths_s: Inner floating windows to compute.
+        slope_window_m: Floating distance window in meters for slope stats.
+        hr_zone_tabs_bpm: Optional command-line HR zone tabs.
+        power_zone_tabs_w: Optional command-line power zone tabs.
+        hr_hist_bins: Optional command-line HR histogram bin count.
+        power_hist_bins: Optional command-line power histogram bin count.
+        non_moving_speed_threshold_kmh: Maximum speed considered stationary.
+        non_moving_perimeter_m: Maximum location drift for stationary detection.
 
     Returns:
         Ranked interval statistics.
@@ -65,11 +80,32 @@ def identify_top_intervals(
         raise ValueError(
             f"analyzed_metric must be 'power' or 'heart_rate', got '{analyzed_metric}'."
         )
+    if slope_window_m <= 0:
+        raise ValueError(f"slope_window_m must be > 0, got {slope_window_m}.")
+    if non_moving_speed_threshold_kmh < 0:
+        raise ValueError(
+            "non_moving_speed_threshold_kmh must be >= 0, got "
+            f"{non_moving_speed_threshold_kmh}."
+        )
+    if non_moving_perimeter_m <= 0:
+        raise ValueError(
+            f"non_moving_perimeter_m must be > 0, got {non_moving_perimeter_m}."
+        )
 
     inner_lengths = sorted(float(x) for x in inner_interval_lengths_s)
     for item in inner_lengths:
         if item <= 0:
             raise ValueError(f"Inner interval lengths must be > 0, got {item}.")
+
+    hr_tabs = _normalize_tabs(hr_zone_tabs_bpm, "hr_zone_tabs_bpm")
+    power_tabs = _normalize_tabs(power_zone_tabs_w, "power_zone_tabs_w")
+
+    if hr_hist_bins is not None and hr_hist_bins <= 0:
+        raise ValueError(f"hr_hist_bins must be > 0 when provided, got {hr_hist_bins}.")
+    if power_hist_bins is not None and power_hist_bins <= 0:
+        raise ValueError(
+            f"power_hist_bins must be > 0 when provided, got {power_hist_bins}."
+        )
 
     prepared = _prepare_activity(activity)
     if duration_s > prepared.duration_s + EPSILON:
@@ -107,6 +143,13 @@ def identify_top_intervals(
                 start_s=window.start_s,
                 end_s=window.end_s,
                 inner_interval_lengths_s=inner_lengths,
+                slope_window_m=slope_window_m,
+                hr_zone_tabs_cmd=hr_tabs,
+                power_zone_tabs_cmd=power_tabs,
+                hr_hist_bins=hr_hist_bins,
+                power_hist_bins=power_hist_bins,
+                non_moving_speed_threshold_kmh=non_moving_speed_threshold_kmh,
+                non_moving_perimeter_m=non_moving_perimeter_m,
             )
         )
     return results
@@ -182,7 +225,9 @@ def _build_candidates(
         end_s = start_s + duration_s
         if end_s > prepared.duration_s + EPSILON:
             break
-        average = _metric_average(prepared, analyzed_metric, start_s, end_s, require_full=True)
+        average = _metric_average(
+            prepared, analyzed_metric, start_s, end_s, require_full=True
+        )
         if average is None:
             continue
         candidates.append(
@@ -205,6 +250,13 @@ def _compute_interval_stats(
     start_s: float,
     end_s: float,
     inner_interval_lengths_s: list[float],
+    slope_window_m: float,
+    hr_zone_tabs_cmd: tuple[float, ...] | None,
+    power_zone_tabs_cmd: tuple[float, ...] | None,
+    hr_hist_bins: int | None,
+    power_hist_bins: int | None,
+    non_moving_speed_threshold_kmh: float,
+    non_moving_perimeter_m: float,
 ) -> IntervalStats:
     activity = prepared.activity
     duration = end_s - start_s
@@ -221,6 +273,28 @@ def _compute_interval_stats(
 
     length_m = _distance_length(prepared, start_s, end_s)
 
+    power_samples = _metric_samples(prepared, "power", start_s, end_s)
+    hr_samples = _metric_samples(prepared, "heart_rate", start_s, end_s)
+    speed_samples = _speed_samples(prepared, start_s, end_s)
+
+    min_power, med_power, _, _ = _weighted_summary(power_samples)
+    min_hr, med_hr, _, _ = _weighted_summary(hr_samples)
+    min_speed, med_speed, avg_speed, max_speed = _weighted_summary(speed_samples)
+
+    interval_profile = _interval_distance_elevation_profile(prepared, start_s, end_s)
+    ascent_m, descent_m = _ascent_descent(interval_profile)
+    min_slope, med_slope, avg_slope, max_slope = _slope_summary(
+        interval_profile,
+        slope_window_m,
+    )
+    non_moving_time_s = _non_moving_elapsed_time(
+        prepared=prepared,
+        start_s=start_s,
+        end_s=end_s,
+        speed_threshold_kmh=non_moving_speed_threshold_kmh,
+        perimeter_m=non_moving_perimeter_m,
+    )
+
     inner_power: dict[float, float | None] = {}
     inner_hr: dict[float, float | None] = {}
     for inner in inner_interval_lengths_s:
@@ -235,6 +309,14 @@ def _compute_interval_stats(
             prepared, "heart_rate", start_s, end_s, inner
         )
 
+    hr_hist_profile = _histogram_by_tabs(hr_samples, activity.heart_rate_zone_tabs_bpm)
+    hr_hist_cmd = _histogram_by_tabs(hr_samples, hr_zone_tabs_cmd)
+    hr_hist_by_bins = _histogram_by_bin_count(hr_samples, hr_hist_bins)
+
+    power_hist_profile = _histogram_by_tabs(power_samples, activity.power_zone_tabs_w)
+    power_hist_cmd = _histogram_by_tabs(power_samples, power_zone_tabs_cmd)
+    power_hist_by_bins = _histogram_by_bin_count(power_samples, power_hist_bins)
+
     start_time = activity.start_time + timedelta(seconds=start_s)
     end_time = activity.start_time + timedelta(seconds=end_s)
 
@@ -246,11 +328,37 @@ def _compute_interval_stats(
         start_time=start_time,
         end_time=end_time,
         duration_s=duration,
+        relative_start_hms=_format_elapsed_hms(start_s),
+        relative_end_hms=_format_elapsed_hms(end_s),
         length_m=length_m,
+        ascent_m=ascent_m,
+        descent_m=descent_m,
+        slope_window_m=slope_window_m,
+        minimum_slope_pct=min_slope,
+        median_slope_pct=med_slope,
+        average_slope_pct=avg_slope,
+        maximum_slope_pct=max_slope,
+        minimum_speed_kmh=min_speed,
+        median_speed_kmh=med_speed,
+        average_speed_kmh=avg_speed,
+        maximum_speed_kmh=max_speed,
+        non_moving_time_s=non_moving_time_s,
+        non_moving_speed_threshold_kmh=non_moving_speed_threshold_kmh,
+        non_moving_perimeter_m=non_moving_perimeter_m,
+        minimum_power_w=min_power,
+        median_power_w=med_power,
         average_power_w=average_power,
         maximum_power_w=max_power,
+        minimum_heart_rate_bpm=min_hr,
+        median_heart_rate_bpm=med_hr,
         average_heart_rate_bpm=average_hr,
         maximum_heart_rate_bpm=max_hr,
+        heart_rate_hist_profile_zones=hr_hist_profile,
+        heart_rate_hist_cmd_zones=hr_hist_cmd,
+        heart_rate_hist_bins=hr_hist_by_bins,
+        power_hist_profile_zones=power_hist_profile,
+        power_hist_cmd_zones=power_hist_cmd,
+        power_hist_bins=power_hist_by_bins,
         inner_power_max_avg_w=inner_power,
         inner_heart_rate_max_avg_bpm=inner_hr,
     )
@@ -403,6 +511,173 @@ def _metric_max(
     return max_value
 
 
+def _metric_samples(
+    prepared: _PreparedActivity,
+    metric: str,
+    start_s: float,
+    end_s: float,
+) -> list[tuple[float, float]]:
+    if metric == "power":
+        values = prepared.power.values
+    elif metric == "heart_rate":
+        values = prepared.heart_rate.values
+    else:  # pragma: no cover
+        raise RuntimeError(f"Unsupported metric: {metric}")
+
+    times = prepared.times
+    n_seg = len(times) - 1
+    i = _segment_index_for_time(times, start_s)
+    samples: list[tuple[float, float]] = []
+
+    while i < n_seg and times[i] < end_s - EPSILON:
+        overlap_start = max(start_s, times[i])
+        overlap_end = min(end_s, times[i + 1])
+        duration = overlap_end - overlap_start
+        if duration > EPSILON and values[i] is not None:
+            samples.append((values[i], duration))
+        i += 1
+
+    return samples
+
+
+def _speed_samples(
+    prepared: _PreparedActivity,
+    start_s: float,
+    end_s: float,
+) -> list[tuple[float, float]]:
+    """Compute speed samples (km/h, duration) from distance derivatives."""
+    times = prepared.times
+    points = prepared.activity.points
+    n_seg = len(times) - 1
+    i = _segment_index_for_time(times, start_s)
+    samples: list[tuple[float, float]] = []
+
+    while i < n_seg and times[i] < end_s - EPSILON:
+        overlap_start = max(start_s, times[i])
+        overlap_end = min(end_s, times[i + 1])
+        duration = overlap_end - overlap_start
+        if duration <= EPSILON:
+            i += 1
+            continue
+
+        d0 = _distance_at(points, times, overlap_start)
+        d1 = _distance_at(points, times, overlap_end)
+        if d0 is None or d1 is None:
+            i += 1
+            continue
+
+        delta_m = d1 - d0
+        if delta_m < -EPSILON:
+            i += 1
+            continue
+
+        speed_kmh = (delta_m / duration) * 3.6
+        samples.append((speed_kmh, duration))
+        i += 1
+
+    return samples
+
+
+def _non_moving_elapsed_time(
+    prepared: _PreparedActivity,
+    start_s: float,
+    end_s: float,
+    speed_threshold_kmh: float,
+    perimeter_m: float,
+) -> float | None:
+    """Estimate non-moving time using low speed and bounded-position drift."""
+    times = prepared.times
+    points = prepared.activity.points
+    n_seg = len(times) - 1
+    i = _segment_index_for_time(times, start_s)
+    anchor_position: tuple[float, float] | None = None
+    stationary_time_s = 0.0
+    had_position_data = False
+
+    while i < n_seg and times[i] < end_s - EPSILON:
+        overlap_start = max(start_s, times[i])
+        overlap_end = min(end_s, times[i + 1])
+        duration = overlap_end - overlap_start
+        if duration <= EPSILON:
+            i += 1
+            continue
+
+        d0 = _distance_at(points, times, overlap_start)
+        d1 = _distance_at(points, times, overlap_end)
+        if d0 is None or d1 is None:
+            anchor_position = None
+            i += 1
+            continue
+
+        delta_m = d1 - d0
+        if delta_m < -EPSILON:
+            anchor_position = None
+            i += 1
+            continue
+
+        speed_kmh = (delta_m / duration) * 3.6
+        p0 = _position_at(points, times, overlap_start)
+        p1 = _position_at(points, times, overlap_end)
+        if p0 is None or p1 is None:
+            anchor_position = None
+            i += 1
+            continue
+        had_position_data = True
+
+        if speed_kmh > speed_threshold_kmh + EPSILON:
+            anchor_position = None
+            i += 1
+            continue
+
+        if anchor_position is None:
+            anchor_position = p0
+
+        if (
+            _haversine_m(anchor_position, p0) <= perimeter_m + EPSILON
+            and _haversine_m(anchor_position, p1) <= perimeter_m + EPSILON
+        ):
+            stationary_time_s += duration
+        else:
+            anchor_position = p0
+            if _haversine_m(anchor_position, p1) <= perimeter_m + EPSILON:
+                stationary_time_s += duration
+
+        i += 1
+
+    if not had_position_data:
+        return None
+    return stationary_time_s
+
+
+def _weighted_summary(
+    samples: list[tuple[float, float]],
+) -> tuple[float | None, float | None, float | None, float | None]:
+    if not samples:
+        return None, None, None, None
+
+    values = [value for value, _ in samples]
+    minimum = min(values)
+    maximum = max(values)
+
+    total_weight = sum(weight for _, weight in samples)
+    if total_weight <= EPSILON:
+        return None, None, None, None
+
+    average = sum(value * weight for value, weight in samples) / total_weight
+
+    sorted_samples = sorted(samples, key=lambda item: item[0])
+    half = total_weight / 2.0
+    cumulative = 0.0
+    median = sorted_samples[-1][0]
+    for value, weight in sorted_samples:
+        cumulative += weight
+        if cumulative + EPSILON >= half:
+            median = value
+            break
+
+    return minimum, median, average, maximum
+
+
 def _distance_length(prepared: _PreparedActivity, start_s: float, end_s: float) -> float | None:
     start_distance = _distance_at(prepared.activity.points, prepared.times, start_s)
     end_distance = _distance_at(prepared.activity.points, prepared.times, end_s)
@@ -419,19 +694,49 @@ def _distance_at(
     times: tuple[float, ...],
     t: float,
 ) -> float | None:
+    return _value_at_time(points, times, t, attr_name="distance_m")
+
+
+def _elevation_at(
+    points: tuple[DataPoint, ...],
+    times: tuple[float, ...],
+    t: float,
+) -> float | None:
+    return _value_at_time(points, times, t, attr_name="elevation_m")
+
+
+def _position_at(
+    points: tuple[DataPoint, ...],
+    times: tuple[float, ...],
+    t: float,
+) -> tuple[float, float] | None:
+    lat = _value_at_time(points, times, t, attr_name="latitude_deg")
+    lon = _value_at_time(points, times, t, attr_name="longitude_deg")
+    if lat is None or lon is None:
+        return None
+    return lat, lon
+
+
+def _value_at_time(
+    points: tuple[DataPoint, ...],
+    times: tuple[float, ...],
+    t: float,
+    attr_name: str,
+) -> float | None:
     n = len(points)
     right = bisect_left(times, t)
 
     if right < n and abs(times[right] - t) <= EPSILON:
-        if points[right].distance_m is not None:
-            return points[right].distance_m
+        value = getattr(points[right], attr_name)
+        if value is not None:
+            return value
 
     left = right - 1
-    while left >= 0 and points[left].distance_m is None:
+    while left >= 0 and getattr(points[left], attr_name) is None:
         left -= 1
 
     r = right
-    while r < n and points[r].distance_m is None:
+    while r < n and getattr(points[r], attr_name) is None:
         r += 1
 
     if left < 0 or r >= n:
@@ -439,8 +744,8 @@ def _distance_at(
 
     x0 = times[left]
     x1 = times[r]
-    y0 = points[left].distance_m
-    y1 = points[r].distance_m
+    y0 = getattr(points[left], attr_name)
+    y1 = getattr(points[r], attr_name)
     if y0 is None or y1 is None:
         return None
 
@@ -448,6 +753,123 @@ def _distance_at(
         return y0
 
     ratio = (t - x0) / (x1 - x0)
+    return y0 + ratio * (y1 - y0)
+
+
+def _interval_distance_elevation_profile(
+    prepared: _PreparedActivity,
+    start_s: float,
+    end_s: float,
+) -> list[tuple[float, float]]:
+    points = prepared.activity.points
+    rows: list[tuple[float, float, float]] = []
+
+    start_dist = _distance_at(points, prepared.times, start_s)
+    start_ele = _elevation_at(points, prepared.times, start_s)
+    if start_dist is not None and start_ele is not None:
+        rows.append((start_s, start_dist, start_ele))
+
+    for point in points:
+        if start_s + EPSILON < point.elapsed_s < end_s - EPSILON:
+            if point.distance_m is not None and point.elevation_m is not None:
+                rows.append((point.elapsed_s, point.distance_m, point.elevation_m))
+
+    end_dist = _distance_at(points, prepared.times, end_s)
+    end_ele = _elevation_at(points, prepared.times, end_s)
+    if end_dist is not None and end_ele is not None:
+        rows.append((end_s, end_dist, end_ele))
+
+    if len(rows) < 2:
+        return []
+
+    rows.sort(key=lambda item: item[0])
+    profile: list[tuple[float, float]] = []
+    for _, distance, elevation in rows:
+        if profile and distance <= profile[-1][0] + EPSILON:
+            continue
+        profile.append((distance, elevation))
+    return profile
+
+
+def _ascent_descent(profile: list[tuple[float, float]]) -> tuple[float | None, float | None]:
+    if len(profile) < 2:
+        return None, None
+
+    ascent = 0.0
+    descent = 0.0
+    for i in range(len(profile) - 1):
+        delta = profile[i + 1][1] - profile[i][1]
+        if delta > 0:
+            ascent += delta
+        elif delta < 0:
+            descent += -delta
+    return ascent, descent
+
+
+def _slope_summary(
+    profile: list[tuple[float, float]],
+    slope_window_m: float,
+) -> tuple[float | None, float | None, float | None, float | None]:
+    if len(profile) < 2:
+        return None, None, None, None
+
+    start_dist = profile[0][0]
+    end_dist = profile[-1][0]
+    if end_dist - start_dist < slope_window_m - EPSILON:
+        return None, None, None, None
+
+    last_start = end_dist - slope_window_m
+    starts = {start_dist, last_start}
+    for distance, _ in profile:
+        if start_dist + EPSILON < distance < last_start - EPSILON:
+            starts.add(distance)
+
+    slopes: list[float] = []
+    for d0 in sorted(starts):
+        d1 = d0 + slope_window_m
+        if d1 > end_dist + EPSILON:
+            continue
+        e0 = _elevation_at_distance(profile, d0)
+        e1 = _elevation_at_distance(profile, d1)
+        if e0 is None or e1 is None:
+            continue
+        slopes.append(((e1 - e0) / slope_window_m) * 100.0)
+
+    if not slopes:
+        return None, None, None, None
+
+    sorted_slopes = sorted(slopes)
+    minimum = sorted_slopes[0]
+    maximum = sorted_slopes[-1]
+    average = sum(slopes) / len(slopes)
+    median = sorted_slopes[len(sorted_slopes) // 2]
+    if len(sorted_slopes) % 2 == 0:
+        mid = len(sorted_slopes) // 2
+        median = (sorted_slopes[mid - 1] + sorted_slopes[mid]) / 2.0
+
+    return minimum, median, average, maximum
+
+
+def _elevation_at_distance(
+    profile: list[tuple[float, float]],
+    distance: float,
+) -> float | None:
+    distances = [item[0] for item in profile]
+    idx = bisect_left(distances, distance)
+    if idx < len(profile) and abs(profile[idx][0] - distance) <= EPSILON:
+        return profile[idx][1]
+
+    left = idx - 1
+    right = idx
+    if left < 0 or right >= len(profile):
+        return None
+
+    x0, y0 = profile[left]
+    x1, y1 = profile[right]
+    if x1 - x0 <= EPSILON:
+        return None
+
+    ratio = (distance - x0) / (x1 - x0)
     return y0 + ratio * (y1 - y0)
 
 
@@ -479,6 +901,125 @@ def _max_floating_average(
         if best is None or avg > best:
             best = avg
     return best
+
+
+def _histogram_by_tabs(
+    samples: list[tuple[float, float]],
+    tabs: tuple[float, ...] | None,
+) -> dict[str, float]:
+    if not samples or not tabs:
+        return {}
+
+    labels = _labels_for_tabs(tabs)
+    counts = {label: 0.0 for label in labels}
+    for value, weight in samples:
+        idx = bisect_right(tabs, value)
+        label = labels[idx]
+        counts[label] += weight
+    return counts
+
+
+def _labels_for_tabs(tabs: tuple[float, ...]) -> list[str]:
+    labels: list[str] = []
+    labels.append(f"<{tabs[0]:g}")
+    for i in range(len(tabs) - 1):
+        labels.append(f"[{tabs[i]:g},{tabs[i + 1]:g})")
+    labels.append(f">={tabs[-1]:g}")
+    return labels
+
+
+def _histogram_by_bin_count(
+    samples: list[tuple[float, float]],
+    bin_count: int | None,
+) -> dict[str, float]:
+    if not samples or bin_count is None:
+        return {}
+    if bin_count <= 0:
+        raise RuntimeError(f"bin_count must be > 0, got {bin_count}.")
+
+    values = [v for v, _ in samples]
+    minimum = min(values)
+    maximum = max(values)
+    total_duration = sum(weight for _, weight in samples)
+
+    if abs(maximum - minimum) <= EPSILON:
+        return {f"[{minimum:g},{maximum:g}]": total_duration}
+
+    width = (maximum - minimum) / bin_count
+    if width <= EPSILON:
+        return {f"[{minimum:g},{maximum:g}]": total_duration}
+
+    counts = [0.0 for _ in range(bin_count)]
+    for value, weight in samples:
+        idx = int((value - minimum) / width)
+        if idx >= bin_count:
+            idx = bin_count - 1
+        counts[idx] += weight
+
+    payload: dict[str, float] = {}
+    for i in range(bin_count):
+        low = minimum + i * width
+        high = minimum + (i + 1) * width
+        if i == bin_count - 1:
+            label = f"[{low:g},{high:g}]"
+        else:
+            label = f"[{low:g},{high:g})"
+        payload[label] = counts[i]
+    return payload
+
+
+def _normalize_tabs(
+    raw_tabs: Iterable[float] | None,
+    name: str,
+) -> tuple[float, ...] | None:
+    if raw_tabs is None:
+        return None
+
+    tabs = sorted(float(x) for x in raw_tabs)
+    if not tabs:
+        return None
+
+    for tab in tabs:
+        if tab <= 0:
+            raise ValueError(f"{name} must contain positive thresholds, got {tab}.")
+
+    unique_tabs: list[float] = []
+    for tab in tabs:
+        if unique_tabs and abs(tab - unique_tabs[-1]) <= EPSILON:
+            continue
+        if unique_tabs and tab < unique_tabs[-1]:
+            raise ValueError(f"{name} must be sorted increasingly.")
+        unique_tabs.append(tab)
+
+    if len(unique_tabs) != len(tabs):
+        raise ValueError(f"{name} contains duplicate thresholds.")
+    return tuple(unique_tabs)
+
+
+def _haversine_m(a: tuple[float, float], b: tuple[float, float]) -> float:
+    """Great-circle distance in meters for two latitude/longitude points."""
+    lat1_rad = math.radians(a[0])
+    lon1_rad = math.radians(a[1])
+    lat2_rad = math.radians(b[0])
+    lon2_rad = math.radians(b[1])
+
+    dlat = lat2_rad - lat1_rad
+    dlon = lon2_rad - lon1_rad
+    sin_dlat = math.sin(dlat / 2.0)
+    sin_dlon = math.sin(dlon / 2.0)
+    h = sin_dlat * sin_dlat + math.cos(lat1_rad) * math.cos(lat2_rad) * sin_dlon * sin_dlon
+    c = 2.0 * math.asin(min(1.0, math.sqrt(h)))
+    return 6_371_000.0 * c
+
+
+def _format_elapsed_hms(seconds: float) -> str:
+    total_ms = int(round(seconds * 1000.0))
+    hours = total_ms // 3_600_000
+    rem = total_ms % 3_600_000
+    minutes = rem // 60_000
+    rem = rem % 60_000
+    sec = rem / 1000.0
+    return f"{hours:02d}:{minutes:02d}:{sec:06.3f}"
 
 
 def _overlap_seconds(a: IntervalWindow, b: IntervalWindow) -> float:

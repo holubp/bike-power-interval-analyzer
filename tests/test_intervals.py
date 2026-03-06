@@ -33,7 +33,7 @@ def _build_activity() -> ActivityData:
                 heart_rate_bpm=hr,
                 latitude_deg=50.0 + elapsed * 1e-5,
                 longitude_deg=14.0 + elapsed * 1e-5,
-                elevation_m=200.0,
+                elevation_m=200.0 + elapsed * 0.1,
             )
         )
         distance += 10.0
@@ -128,4 +128,93 @@ def test_missing_metric_coverage_fails() -> None:
             count=1,
             analyzed_metric="power",
             inner_interval_lengths_s=[10.0],
+        )
+
+
+def test_extended_stats_and_histograms() -> None:
+    start = datetime(2025, 1, 1, 12, 0, 0, tzinfo=timezone.utc)
+    points: list[DataPoint] = []
+    distance = 0.0
+    elevation = 100.0
+    for elapsed in range(0, 81):
+        if elapsed < 40:
+            elevation += 0.5
+        else:
+            elevation -= 0.25
+        points.append(
+            DataPoint(
+                timestamp=start + timedelta(seconds=elapsed),
+                elapsed_s=float(elapsed),
+                distance_m=distance,
+                power_w=120.0 + elapsed,
+                heart_rate_bpm=130.0 + (elapsed % 15),
+                latitude_deg=50.0,
+                longitude_deg=14.0,
+                elevation_m=elevation,
+            )
+        )
+        distance += 8.0
+
+    activity = ActivityData(
+        source_path="synthetic-with-zones",
+        start_time=start,
+        points=tuple(points),
+        heart_rate_zone_tabs_bpm=(135.0, 142.0),
+        power_zone_tabs_w=(150.0, 180.0),
+    )
+
+    intervals = identify_top_intervals(
+        activity=activity,
+        duration_s=20.0,
+        max_overlap_ratio=0.0,
+        count=1,
+        analyzed_metric="power",
+        inner_interval_lengths_s=[],
+        slope_window_m=30.0,
+        hr_zone_tabs_bpm=[134.0, 141.0],
+        power_zone_tabs_w=[145.0, 175.0],
+        hr_hist_bins=4,
+        power_hist_bins=3,
+    )
+
+    assert len(intervals) == 1
+    first = intervals[0]
+    assert first.relative_start_hms.count(":") == 2
+    assert first.relative_end_hms.count(":") == 2
+    assert first.ascent_m is not None
+    assert first.descent_m is not None
+    assert first.minimum_slope_pct is not None
+    assert first.median_slope_pct is not None
+    assert first.average_slope_pct is not None
+    assert first.maximum_slope_pct is not None
+    assert first.minimum_speed_kmh is not None
+    assert first.median_speed_kmh is not None
+    assert first.average_speed_kmh is not None
+    assert first.maximum_speed_kmh is not None
+    assert first.non_moving_time_s is not None
+    assert first.minimum_power_w is not None
+    assert first.median_power_w is not None
+    assert first.minimum_heart_rate_bpm is not None
+    assert first.median_heart_rate_bpm is not None
+    assert first.heart_rate_hist_profile_zones
+    assert first.heart_rate_hist_cmd_zones
+    assert first.heart_rate_hist_bins
+    assert first.power_hist_profile_zones
+    assert first.power_hist_cmd_zones
+    assert first.power_hist_bins
+    assert sum(first.heart_rate_hist_cmd_zones.values()) == pytest.approx(first.duration_s)
+    assert sum(first.power_hist_cmd_zones.values()) == pytest.approx(first.duration_s)
+
+
+def test_duplicate_tabs_rejected() -> None:
+    activity = _build_activity()
+    with pytest.raises(ValueError):
+        identify_top_intervals(
+            activity=activity,
+            duration_s=20.0,
+            max_overlap_ratio=0.0,
+            count=1,
+            analyzed_metric="power",
+            inner_interval_lengths_s=[10.0],
+            hr_zone_tabs_bpm=[140.0, 140.0],
         )

@@ -24,6 +24,11 @@ Tests are in `tests/`.
 - Overlap must be in `[0, 1)`.
 - Interval averages are computed only for windows with full metric coverage.
 - If `--no-stdout` is set, at least one file output must be requested.
+- Segment output now includes relative times, ascent/descent, slope stats (`--slope-window-m`), HR/power min/median/avg/max, and HR/power histograms (profile zones, custom tabs, and fixed bins when configured).
+- Segment output also includes speed min/median/avg/max and non-moving elapsed time based on speed/perimeter thresholds.
+- CLI supports JSON presets via `--preset`; preset values act as defaults and explicit CLI args must take precedence.
+- Multiple `--preset` values are supported; presets are applied in order and later presets override earlier ones.
+- CLI can export effective merged settings via `--write-preset` for reproducible reruns.
 
 ## Development Workflow
 

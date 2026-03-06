@@ -72,7 +72,7 @@ def parse_duration_to_seconds(raw: str) -> float:
     return total
 
 
-def parse_inner_interval_lengths(values: list[str] | None) -> list[float]:
+def parse_inner_interval_lengths(values: list[object] | None) -> list[float]:
     """Parse ``--inner-intlen`` values into positive seconds.
 
     Args:
@@ -91,9 +91,10 @@ def parse_inner_interval_lengths(values: list[str] | None) -> list[float]:
 
     parsed: list[float] = []
     for raw in values:
-        if not raw.strip():
+        text = str(raw).strip()
+        if not text:
             raise ValueError("Inner interval length entries must not be empty strings.")
-        seconds = parse_duration_to_seconds(raw)
+        seconds = parse_duration_to_seconds(text)
         if seconds <= 0:
             raise ValueError(f"Inner interval length must be > 0, got {seconds}.")
         parsed.append(seconds)
