@@ -1,17 +1,17 @@
 # Bike Power Interval Analyzer
 
-CLI tool to identify maximum-average interval windows for **power**, **heart rate**, or both, from Garmin **TCX** and **FIT** activity files.
+CLI tool to identify maximum-average interval windows for **power**, **heart rate**, and/or file-stored intervals from Garmin **TCX** and **FIT** files.
 
 ## Features
 
-- Ingest `.tcx` and `.fit` files
+- Ingest `.tcx`, `.fit`, and Garmin Connect export `.zip` (containing FIT) files
 - Fixed interval duration input as:
   - seconds (`300`, `12.5`)
   - `MM:SS` (`05:00`)
   - `HH:MM:SS` (`01:02:30`)
 - Configurable maximum overlap between selected intervals (`0 <= overlap < 1`)
 - Configurable number of intervals per analyzed metric
-- Analyze power, heart rate, or both (separately)
+- Analyze any combination of power, heart rate, and file intervals
 - Text report to STDOUT (ANSI color by default, optional black/white)
 - Optional suppression of STDOUT
 - Optional CSV output
@@ -77,7 +77,7 @@ sh bike-intervals INPUT_FILE --duration DURATION [options]
 You can define defaults in JSON preset files and still override any of them on the command line.
 
 ```bash
-python3 run.py --preset presets/threshold.json --count 5 --metrics both
+python3 run.py --preset presets/threshold.json --count 5 --target power,heart-rate
 python3 run.py --preset presets/base.json --preset presets/user.json --preset presets/workout.json
 python3 run.py ride.fit --duration 05:00 --write-preset presets/new.json
 ```
@@ -89,7 +89,7 @@ Preset example:
   "input_file": "ride.fit",
   "duration": "05:00",
   "count": 3,
-  "metrics": "power",
+  "target": "power",
   "inner_intlen": [10, 30],
   "slope_window_m": 30,
   "hr_zone_tabs": [130, 150, 170],
@@ -115,7 +115,7 @@ bike-intervals ride.fit \
   --duration 05:00 \
   --max-overlap 0.2 \
   --count 5 \
-  --metrics both \
+  --target power,heart-rate \
   --inner-intlen 10 30 60 \
   --csv-out out/intervals.csv \
   --json-out out/intervals.json \
@@ -125,18 +125,26 @@ bike-intervals ride.fit \
 ## CLI Reference
 
 - `input_file`:
-  - Path to `.tcx` or `.fit`
+  - Path to `.tcx`, `.fit`, or Garmin Connect `.zip` export containing FIT
 - `-d, --duration` (required):
   - Interval duration (`seconds`, `MM:SS`, `HH:MM:SS`)
+  - Required when target includes `power` or `heart-rate`; ignored for interval-only runs
 - `--max-overlap`:
   - Maximum overlap proportion in `[0, 1)`
   - `0` means no overlap
 - `-n, --count`:
-  - Number of intervals to identify per analyzed metric
-- `--metrics`:
-  - `power`, `heart-rate`, or `both`
+  - Number of intervals to identify for window-based targets (`power`/`heart-rate`)
+  - Not applied to `interval` target (stored intervals are all returned unless filtered)
+- `--target`:
+  - Comma-separated list from `power`, `heart-rate`, `interval`
+  - Example: `--target power,heart-rate` or `--target interval`
+  - `interval` uses intervals/laps stored in the source file metadata
+- `--interval-select`:
+  - For `interval` target: `all` (default) or comma-separated labels/1-based indices
+  - Example: `--interval-select 2,lap-5`
 - `--inner-intlen`:
   - Inner floating windows for nested max-average values
+  - Space-separated and comma-separated forms are both accepted
   - Default is `[10]`
   - Pass `--inner-intlen` with no values for an empty list
 - `--slope-window-m`:
@@ -144,8 +152,10 @@ bike-intervals ride.fit \
   - Default `30`
 - `--hr-zone-tabs BPM ...`:
   - Custom HR zone tabs; histogram bins become `<tab1`, `[tab_i,tab_i+1)`, `>=last_tab`
+  - Space-separated and comma-separated forms are both accepted
 - `--power-zone-tabs WATTS ...`:
   - Custom power zone tabs with the same tab semantics
+  - Space-separated and comma-separated forms are both accepted
 - `--hr-hist-bins`:
   - Number of bins for heart-rate histogram
 - `--power-hist-bins`:

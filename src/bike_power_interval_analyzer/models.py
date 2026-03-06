@@ -30,6 +30,16 @@ class ActivityData:
     points: tuple[DataPoint, ...]
     heart_rate_zone_tabs_bpm: tuple[float, ...] | None = None
     power_zone_tabs_w: tuple[float, ...] | None = None
+    stored_intervals: tuple["StoredInterval", ...] = ()
+
+
+@dataclass(frozen=True)
+class StoredInterval:
+    """Interval already present in source file metadata (for example laps)."""
+
+    start_s: float
+    end_s: float
+    label: str
 
 
 @dataclass(frozen=True)

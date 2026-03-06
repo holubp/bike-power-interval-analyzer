@@ -8,7 +8,7 @@ from datetime import timedelta
 import math
 from typing import Iterable
 
-from .models import ActivityData, DataPoint, IntervalStats, IntervalWindow
+from .models import ActivityData, DataPoint, IntervalStats, IntervalWindow, StoredInterval
 
 EPSILON = 1e-9
 
@@ -153,6 +153,132 @@ def identify_top_intervals(
             )
         )
     return results
+
+
+def analyze_stored_intervals(
+    activity: ActivityData,
+    interval_selectors: list[str] | None,
+    inner_interval_lengths_s: Iterable[float],
+    slope_window_m: float = 30.0,
+    hr_zone_tabs_bpm: Iterable[float] | None = None,
+    power_zone_tabs_w: Iterable[float] | None = None,
+    hr_hist_bins: int | None = None,
+    power_hist_bins: int | None = None,
+    non_moving_speed_threshold_kmh: float = 3.0,
+    non_moving_perimeter_m: float = 20.0,
+) -> list[IntervalStats]:
+    """Analyze intervals already stored in source file metadata.
+
+    Args:
+        activity: Parsed activity stream.
+        interval_selectors: Optional list of selectors (label or 1-based index).
+            ``None`` means all stored intervals.
+        inner_interval_lengths_s: Inner floating windows to compute.
+        slope_window_m: Floating distance window in meters for slope stats.
+        hr_zone_tabs_bpm: Optional command-line HR zone tabs.
+        power_zone_tabs_w: Optional command-line power zone tabs.
+        hr_hist_bins: Optional command-line HR histogram bin count.
+        power_hist_bins: Optional command-line power histogram bin count.
+        non_moving_speed_threshold_kmh: Maximum speed considered stationary.
+        non_moving_perimeter_m: Maximum location drift for stationary detection.
+    """
+    if slope_window_m <= 0:
+        raise ValueError(f"slope_window_m must be > 0, got {slope_window_m}.")
+    if non_moving_speed_threshold_kmh < 0:
+        raise ValueError(
+            "non_moving_speed_threshold_kmh must be >= 0, got "
+            f"{non_moving_speed_threshold_kmh}."
+        )
+    if non_moving_perimeter_m <= 0:
+        raise ValueError(
+            f"non_moving_perimeter_m must be > 0, got {non_moving_perimeter_m}."
+        )
+
+    inner_lengths = sorted(float(x) for x in inner_interval_lengths_s)
+    for item in inner_lengths:
+        if item <= 0:
+            raise ValueError(f"Inner interval lengths must be > 0, got {item}.")
+
+    hr_tabs = _normalize_tabs(hr_zone_tabs_bpm, "hr_zone_tabs_bpm")
+    power_tabs = _normalize_tabs(power_zone_tabs_w, "power_zone_tabs_w")
+
+    if hr_hist_bins is not None and hr_hist_bins <= 0:
+        raise ValueError(f"hr_hist_bins must be > 0 when provided, got {hr_hist_bins}.")
+    if power_hist_bins is not None and power_hist_bins <= 0:
+        raise ValueError(
+            f"power_hist_bins must be > 0 when provided, got {power_hist_bins}."
+        )
+
+    prepared = _prepare_activity(activity)
+    if not activity.stored_intervals:
+        raise RuntimeError("No intervals/laps were found in the input file.")
+
+    intervals: list[StoredInterval] = _select_stored_intervals(
+        stored_intervals=list(activity.stored_intervals),
+        selectors=interval_selectors,
+    )
+    results: list[IntervalStats] = []
+    for rank, interval in enumerate(intervals, start=1):
+        results.append(
+            _compute_interval_stats(
+                prepared=prepared,
+                rank=rank,
+                analyzed_metric="interval",
+                start_s=interval.start_s,
+                end_s=interval.end_s,
+                inner_interval_lengths_s=inner_lengths,
+                slope_window_m=slope_window_m,
+                hr_zone_tabs_cmd=hr_tabs,
+                power_zone_tabs_cmd=power_tabs,
+                hr_hist_bins=hr_hist_bins,
+                power_hist_bins=power_hist_bins,
+                non_moving_speed_threshold_kmh=non_moving_speed_threshold_kmh,
+                non_moving_perimeter_m=non_moving_perimeter_m,
+            )
+        )
+    return results
+
+
+def _select_stored_intervals(
+    stored_intervals: list[StoredInterval],
+    selectors: list[str] | None,
+) -> list[StoredInterval]:
+    if selectors is None:
+        return list(stored_intervals)
+
+    selected: list[StoredInterval] = []
+    seen_ids: set[tuple[float, float, str]] = set()
+    for selector in selectors:
+        if selector.isdigit():
+            index = int(selector)
+            if index <= 0:
+                raise ValueError(
+                    f"Interval selector index must be >= 1, got {selector}."
+                )
+            if index > len(stored_intervals):
+                raise ValueError(
+                    f"Interval selector index {selector} exceeds available intervals "
+                    f"({len(stored_intervals)})."
+                )
+            interval = stored_intervals[index - 1]
+            key = (interval.start_s, interval.end_s, interval.label)
+            if key not in seen_ids:
+                selected.append(interval)
+                seen_ids.add(key)
+            continue
+
+        matches = [interval for interval in stored_intervals if interval.label == selector]
+        if not matches:
+            raise ValueError(
+                f"Interval selector '{selector}' does not match any interval label."
+            )
+        for interval in matches:
+            key = (interval.start_s, interval.end_s, interval.label)
+            if key not in seen_ids:
+                selected.append(interval)
+                seen_ids.add(key)
+
+    return selected
 
 
 def _prepare_activity(activity: ActivityData) -> _PreparedActivity:

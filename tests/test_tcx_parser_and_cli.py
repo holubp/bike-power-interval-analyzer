@@ -3,6 +3,8 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+import pytest
+
 from bike_power_interval_analyzer.cli import main
 from bike_power_interval_analyzer.parsers import parse_tcx
 
@@ -49,6 +51,56 @@ def _write_tcx(path: Path) -> None:
     path.write_text(tcx, encoding="utf-8")
 
 
+def _write_tcx_two_laps(path: Path) -> None:
+    lap1_points = []
+    lap2_points = []
+    for i in range(0, 21):
+        lap1_points.append(
+            f"""
+            <Trackpoint>
+              <Time>2025-01-01T12:00:{i:02d}Z</Time>
+              <Position>
+                <LatitudeDegrees>{50.200000 + i * 0.0001:.6f}</LatitudeDegrees>
+                <LongitudeDegrees>{14.200000 + i * 0.0001:.6f}</LongitudeDegrees>
+              </Position>
+              <AltitudeMeters>{200 + i * 0.1:.1f}</AltitudeMeters>
+              <DistanceMeters>{i * 8.0:.2f}</DistanceMeters>
+              <HeartRateBpm><Value>{140 + i % 5}</Value></HeartRateBpm>
+              <Extensions><TPX xmlns=\"http://www.garmin.com/xmlschemas/ActivityExtension/v2\"><Watts>{180 + i}</Watts></TPX></Extensions>
+            </Trackpoint>
+            """
+        )
+    for i in range(20, 41):
+        lap2_points.append(
+            f"""
+            <Trackpoint>
+              <Time>2025-01-01T12:00:{i:02d}Z</Time>
+              <Position>
+                <LatitudeDegrees>{50.210000 + i * 0.0001:.6f}</LatitudeDegrees>
+                <LongitudeDegrees>{14.210000 + i * 0.0001:.6f}</LongitudeDegrees>
+              </Position>
+              <AltitudeMeters>{202 + i * 0.1:.1f}</AltitudeMeters>
+              <DistanceMeters>{160 + (i - 20) * 9.0:.2f}</DistanceMeters>
+              <HeartRateBpm><Value>{150 + i % 5}</Value></HeartRateBpm>
+              <Extensions><TPX xmlns=\"http://www.garmin.com/xmlschemas/ActivityExtension/v2\"><Watts>{220 + i}</Watts></TPX></Extensions>
+            </Trackpoint>
+            """
+        )
+
+    tcx = f"""<?xml version=\"1.0\" encoding=\"UTF-8\"?>
+<TrainingCenterDatabase xmlns=\"http://www.garmin.com/xmlschemas/TrainingCenterDatabase/v2\">
+  <Activities>
+    <Activity Sport=\"Biking\">
+      <Id>2025-01-01T12:00:00Z</Id>
+      <Lap StartTime=\"2025-01-01T12:00:00Z\"><TotalTimeSeconds>20</TotalTimeSeconds><Track>{''.join(lap1_points)}</Track></Lap>
+      <Lap StartTime=\"2025-01-01T12:00:20Z\"><TotalTimeSeconds>20</TotalTimeSeconds><Track>{''.join(lap2_points)}</Track></Lap>
+    </Activity>
+  </Activities>
+</TrainingCenterDatabase>
+"""
+    path.write_text(tcx, encoding="utf-8")
+
+
 def test_parse_tcx(tmp_path: Path) -> None:
     file_path = tmp_path / "sample.tcx"
     _write_tcx(file_path)
@@ -58,6 +110,7 @@ def test_parse_tcx(tmp_path: Path) -> None:
     assert activity.points[0].elapsed_s == 0
     assert activity.points[10].power_w == 320
     assert activity.points[20].heart_rate_bpm == 170
+    assert len(activity.stored_intervals) == 1
 
 
 def test_cli_writes_json_csv_and_gpx(tmp_path: Path) -> None:
@@ -75,19 +128,16 @@ def test_cli_writes_json_csv_and_gpx(tmp_path: Path) -> None:
             "00:15",
             "--count",
             "2",
-            "--metrics",
-            "both",
+            "--target",
+            "power,heart-rate",
             "--inner-intlen",
-            "5",
-            "10",
+            "5,10",
             "--slope-window-m",
             "25",
             "--hr-zone-tabs",
-            "145",
-            "160",
+            "145,160",
             "--power-zone-tabs",
-            "190",
-            "250",
+            "190,250",
             "--hr-hist-bins",
             "4",
             "--power-hist-bins",
@@ -138,7 +188,7 @@ def test_cli_preset_defaults_and_override(tmp_path: Path) -> None:
                 "input_file": str(input_file),
                 "duration": "00:12",
                 "count": 1,
-                "metrics": "power",
+                "target": "power",
                 "inner_intlen": [6],
                 "slope_window_m": 20,
                 "no_stdout": True,
@@ -154,8 +204,8 @@ def test_cli_preset_defaults_and_override(tmp_path: Path) -> None:
             str(preset_path),
             "--count",
             "2",
-            "--metrics",
-            "both",
+            "--target",
+            "power,heart-rate",
         ]
     )
     assert exit_code == 0
@@ -164,7 +214,7 @@ def test_cli_preset_defaults_and_override(tmp_path: Path) -> None:
     payload = json.loads(output_json.read_text(encoding="utf-8"))
     assert payload["duration_s"] == 12
     assert payload["count"] == 2
-    assert payload["metrics"] == "both"
+    assert payload["target"] == "power,heart-rate"
     assert set(payload["results"].keys()) == {"power", "heart_rate"}
 
 
@@ -189,8 +239,8 @@ def test_cli_write_preset_exports_effective_config(tmp_path: Path) -> None:
             "15",
             "--count",
             "2",
-            "--metrics",
-            "both",
+            "--target",
+            "power,heart-rate",
             "--inner-intlen",
             "5",
             "10",
@@ -226,7 +276,7 @@ def test_cli_write_preset_exports_effective_config(tmp_path: Path) -> None:
     assert preset_payload["input_file"] == str(input_file)
     assert preset_payload["duration"] == "15"
     assert preset_payload["count"] == 2
-    assert preset_payload["metrics"] == "both"
+    assert preset_payload["target"] == "power,heart-rate"
     assert preset_payload["inner_intlen"] == [5.0, 10.0]
     assert preset_payload["slope_window_m"] == 25.0
     assert preset_payload["hr_zone_tabs"] == [145.0, 160.0]
@@ -266,7 +316,7 @@ def test_multiple_presets_are_applied_in_order(tmp_path: Path) -> None:
                 "input_file": str(input_file),
                 "duration": "00:10",
                 "count": 1,
-                "metrics": "power",
+                "target": "power",
                 "no_stdout": True,
                 "json_out": str(output_json),
                 "non_moving_speed_threshold_kmh": 3.0,
@@ -278,7 +328,7 @@ def test_multiple_presets_are_applied_in_order(tmp_path: Path) -> None:
         json.dumps(
             {
                 "count": 2,
-                "metrics": "both",
+                "target": "power,heart-rate",
                 "non_moving_speed_threshold_kmh": 2.0,
                 "non_moving_perimeter_m": 18.0,
             }
@@ -297,6 +347,63 @@ def test_multiple_presets_are_applied_in_order(tmp_path: Path) -> None:
     assert exit_code == 0
     payload = json.loads(output_json.read_text(encoding="utf-8"))
     assert payload["count"] == 2
-    assert payload["metrics"] == "both"
+    assert payload["target"] == "power,heart-rate"
     assert payload["non_moving_speed_threshold_kmh"] == 2.0
     assert payload["non_moving_perimeter_m"] == 18.0
+
+
+def test_cli_interval_target_uses_file_intervals_without_duration(tmp_path: Path) -> None:
+    input_file = tmp_path / "sample_two_laps.tcx"
+    _write_tcx_two_laps(input_file)
+    output_json = tmp_path / "interval_target.json"
+
+    exit_code = main(
+        [
+            str(input_file),
+            "--target",
+            "interval",
+            "--count",
+            "1",
+            "--no-stdout",
+            "--json-out",
+            str(output_json),
+        ]
+    )
+    assert exit_code == 0
+    payload = json.loads(output_json.read_text(encoding="utf-8"))
+    assert payload["target"] == "interval"
+    assert payload["duration_s"] is None
+    assert set(payload["results"].keys()) == {"interval"}
+    assert len(payload["results"]["interval"]) == 2
+
+
+def test_cli_interval_select_filters_specific_intervals(tmp_path: Path) -> None:
+    input_file = tmp_path / "sample_two_laps.tcx"
+    _write_tcx_two_laps(input_file)
+    output_json = tmp_path / "interval_select.json"
+
+    exit_code = main(
+        [
+            str(input_file),
+            "--target",
+            "interval",
+            "--interval-select",
+            "2",
+            "--no-stdout",
+            "--json-out",
+            str(output_json),
+        ]
+    )
+    assert exit_code == 0
+    payload = json.loads(output_json.read_text(encoding="utf-8"))
+    intervals = payload["results"]["interval"]
+    assert len(intervals) == 1
+    assert intervals[0]["start_elapsed_s"] == pytest.approx(20.0)
+
+
+def test_cli_rejects_legacy_both_target(tmp_path: Path) -> None:
+    input_file = tmp_path / "sample.tcx"
+    _write_tcx(input_file)
+    with pytest.raises(SystemExit) as exc_info:
+        main([str(input_file), "--target", "both", "--duration", "00:10"])
+    assert exc_info.value.code == 2

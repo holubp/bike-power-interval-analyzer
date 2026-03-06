@@ -9,7 +9,7 @@ from pathlib import Path
 from typing import Any
 
 from .duration import parse_duration_to_seconds, parse_inner_interval_lengths
-from .intervals import identify_top_intervals
+from .intervals import analyze_stored_intervals, identify_top_intervals
 from .output import (
     flatten_results_for_csv,
     render_text_report,
@@ -21,10 +21,10 @@ from .output import (
 from .parsers import parse_activity_file
 
 
-METRIC_MAP = {
-    "power": ["power"],
-    "heart-rate": ["heart_rate"],
-    "both": ["power", "heart_rate"],
+TARGET_TO_RESULT_KEY = {
+    "power": "power",
+    "heart-rate": "heart_rate",
+    "interval": "interval",
 }
 
 PRESET_ALLOWED_KEYS = {
@@ -32,7 +32,9 @@ PRESET_ALLOWED_KEYS = {
     "duration",
     "max_overlap",
     "count",
+    "target",
     "metrics",
+    "interval_select",
     "inner_intlen",
     "slope_window_m",
     "hr_zone_tabs",
@@ -97,10 +99,19 @@ def build_argument_parser(defaults: dict[str, Any] | None = None) -> argparse.Ar
         help="Maximum number of intervals to identify per metric",
     )
     parser.add_argument(
+        "--target",
+        default=default_values.get(
+            "target", default_values.get("metrics", "power,heart-rate")
+        ),
+        help=(
+            "Analysis target(s) as comma-separated values from "
+            "power,heart-rate,interval"
+        ),
+    )
+    parser.add_argument(
         "--metrics",
-        choices=["power", "heart-rate", "both"],
-        default=default_values.get("metrics", "both"),
-        help="Which metric(s) to optimize",
+        dest="target",
+        help=argparse.SUPPRESS,
     )
     parser.add_argument(
         "--inner-intlen",
@@ -108,8 +119,16 @@ def build_argument_parser(defaults: dict[str, Any] | None = None) -> argparse.Ar
         default=default_values.get("inner_intlen"),
         metavar="SECONDS",
         help=(
-            "Inner floating windows in seconds/MM:SS/HH:MM:SS. "
+            "Inner floating windows in seconds/MM:SS/HH:MM:SS (space or comma separated). "
             "Default: 10. Pass '--inner-intlen' with no values for an empty list."
+        ),
+    )
+    parser.add_argument(
+        "--interval-select",
+        default=default_values.get("interval_select", "all"),
+        help=(
+            "Selectors for file-stored intervals: 'all' or comma-separated "
+            "labels/1-based indices (e.g. 1,3,lap-5)"
         ),
     )
     parser.add_argument(
@@ -123,14 +142,14 @@ def build_argument_parser(defaults: dict[str, Any] | None = None) -> argparse.Ar
         nargs="+",
         default=default_values.get("hr_zone_tabs"),
         metavar="BPM",
-        help="Custom HR zone tabs (e.g. --hr-zone-tabs 120 140 160)",
+        help="Custom HR zone tabs (space or comma separated, e.g. 120 140 160 or 120,140,160)",
     )
     parser.add_argument(
         "--power-zone-tabs",
         nargs="+",
         default=default_values.get("power_zone_tabs"),
         metavar="WATTS",
-        help="Custom power zone tabs (e.g. --power-zone-tabs 150 220 300)",
+        help="Custom power zone tabs (space or comma separated, e.g. 150 220 300 or 150,220,300)",
     )
     parser.add_argument(
         "--hr-hist-bins",
@@ -225,12 +244,22 @@ def main(argv: list[str] | None = None) -> int:
 
     if args.input_file is None:
         parser.error("input_file is required (either on CLI or in preset).")
-    if args.duration is None:
-        parser.error("--duration is required (either on CLI or in preset).")
+    try:
+        target_list = _parse_target_spec(args.target, "--target")
+    except ValueError as exc:
+        parser.error(str(exc))
+    if any(target in {"power", "heart-rate"} for target in target_list) and args.duration is None:
+        parser.error("--duration is required when target includes power or heart-rate.")
 
     try:
-        duration_s = parse_duration_to_seconds(str(args.duration))
-        inner_lengths_s = parse_inner_interval_lengths(args.inner_intlen)
+        duration_s = (
+            parse_duration_to_seconds(str(args.duration))
+            if args.duration is not None
+            else None
+        )
+        inner_lengths_s = parse_inner_interval_lengths(
+            _expand_csv_list(args.inner_intlen, "--inner-intlen")
+        )
     except ValueError as exc:
         parser.error(str(exc))
 
@@ -255,8 +284,15 @@ def main(argv: list[str] | None = None) -> int:
         )
 
     try:
-        hr_zone_tabs = _parse_zone_tabs(args.hr_zone_tabs, "--hr-zone-tabs")
-        power_zone_tabs = _parse_zone_tabs(args.power_zone_tabs, "--power-zone-tabs")
+        hr_zone_tabs = _parse_zone_tabs(
+            _expand_csv_list(args.hr_zone_tabs, "--hr-zone-tabs"),
+            "--hr-zone-tabs",
+        )
+        power_zone_tabs = _parse_zone_tabs(
+            _expand_csv_list(args.power_zone_tabs, "--power-zone-tabs"),
+            "--power-zone-tabs",
+        )
+        interval_selectors = _parse_interval_select(args.interval_select)
     except ValueError as exc:
         parser.error(str(exc))
 
@@ -264,13 +300,10 @@ def main(argv: list[str] | None = None) -> int:
         activity = parse_activity_file(args.input_file)
 
         results_by_metric: dict[str, list] = {}
-        for metric in METRIC_MAP[args.metrics]:
-            results_by_metric[metric] = identify_top_intervals(
+        if "interval" in target_list:
+            results_by_metric["interval"] = analyze_stored_intervals(
                 activity=activity,
-                duration_s=duration_s,
-                max_overlap_ratio=args.max_overlap,
-                count=args.count,
-                analyzed_metric=metric,
+                interval_selectors=interval_selectors,
                 inner_interval_lengths_s=inner_lengths_s,
                 slope_window_m=args.slope_window_m,
                 hr_zone_tabs_bpm=hr_zone_tabs,
@@ -280,6 +313,28 @@ def main(argv: list[str] | None = None) -> int:
                 non_moving_speed_threshold_kmh=args.non_moving_speed_threshold_kmh,
                 non_moving_perimeter_m=args.non_moving_perimeter_m,
             )
+        if any(target in {"power", "heart-rate"} for target in target_list):
+            if duration_s is None:
+                raise RuntimeError("Internal error: duration_s missing for windowed target.")
+            for target in target_list:
+                if target == "interval":
+                    continue
+                metric = TARGET_TO_RESULT_KEY[target]
+                results_by_metric[metric] = identify_top_intervals(
+                    activity=activity,
+                    duration_s=duration_s,
+                    max_overlap_ratio=args.max_overlap,
+                    count=args.count,
+                    analyzed_metric=metric,
+                    inner_interval_lengths_s=inner_lengths_s,
+                    slope_window_m=args.slope_window_m,
+                    hr_zone_tabs_bpm=hr_zone_tabs,
+                    power_zone_tabs_w=power_zone_tabs,
+                    hr_hist_bins=args.hr_hist_bins,
+                    power_hist_bins=args.power_hist_bins,
+                    non_moving_speed_threshold_kmh=args.non_moving_speed_threshold_kmh,
+                    non_moving_perimeter_m=args.non_moving_perimeter_m,
+                )
 
         if not args.no_stdout:
             sys.stdout.write(
@@ -301,7 +356,9 @@ def main(argv: list[str] | None = None) -> int:
             "duration_s": duration_s,
             "max_overlap": args.max_overlap,
             "count": args.count,
-            "metrics": args.metrics,
+            "target": _format_target_spec(target_list),
+            "target_list": target_list,
+            "interval_select": "all" if interval_selectors is None else interval_selectors,
             "inner_interval_lengths_s": inner_lengths_s,
             "slope_window_m": args.slope_window_m,
             "hr_zone_tabs": hr_zone_tabs,
@@ -325,7 +382,10 @@ def main(argv: list[str] | None = None) -> int:
                     duration=args.duration,
                     max_overlap=args.max_overlap,
                     count=args.count,
-                    metrics=args.metrics,
+                    target=_format_target_spec(target_list),
+                    interval_select="all"
+                    if interval_selectors is None
+                    else ",".join(interval_selectors),
                     inner_intlen=inner_lengths_s,
                     slope_window_m=args.slope_window_m,
                     hr_zone_tabs=hr_zone_tabs,
@@ -386,6 +446,9 @@ def _load_preset_defaults(paths: list[str]) -> dict[str, Any]:
                     f"Allowed keys: {sorted(PRESET_ALLOWED_KEYS)}"
                 )
             normalized[normalized_key] = value
+        if "metrics" in normalized and "target" not in normalized:
+            normalized["target"] = normalized["metrics"]
+            del normalized["metrics"]
 
         _validate_preset_types(normalized, path)
         merged.update(normalized)
@@ -401,9 +464,13 @@ def _validate_preset_types(preset: dict[str, Any], source: str) -> None:
         if key in preset and not isinstance(preset[key], list):
             raise ValueError(f"Preset key '{key}' must be an array in {source}.")
 
-    for key in ("input_file", "metrics", "csv_out", "json_out", "gpx_out"):
+    for key in ("input_file", "target", "interval_select", "csv_out", "json_out", "gpx_out"):
         if key in preset and not isinstance(preset[key], str):
             raise ValueError(f"Preset key '{key}' must be a string in {source}.")
+    if "target" in preset:
+        _parse_target_spec(preset["target"], f"preset:{source}:target")
+    if "interval_select" in preset:
+        _parse_interval_select(preset["interval_select"])
 
     if "duration" in preset and not isinstance(preset["duration"], (str, int, float)):
         raise ValueError(f"Preset key 'duration' must be string or number in {source}.")
@@ -453,13 +520,85 @@ def _parse_zone_tabs(raw_values: list[Any] | None, arg_name: str) -> list[float]
     return sorted_tabs
 
 
+def _expand_csv_list(raw_values: list[Any] | None, arg_name: str) -> list[str] | None:
+    """Expand mixed space/comma list values into a flat string list."""
+    if raw_values is None:
+        return None
+    expanded: list[str] = []
+    for raw in raw_values:
+        text = str(raw).strip()
+        if not text:
+            continue
+        parts = [part.strip() for part in text.split(",")]
+        for part in parts:
+            if not part:
+                raise ValueError(f"{arg_name} contains an empty comma-separated value.")
+            expanded.append(part)
+    return expanded
+
+
+def _parse_interval_select(raw: Any) -> list[str] | None:
+    text = str(raw).strip()
+    if not text:
+        raise ValueError("--interval-select must not be empty.")
+    parts = [part.strip() for part in text.split(",")]
+    selectors = [part for part in parts if part]
+    if not selectors:
+        raise ValueError("--interval-select resolved to an empty selector list.")
+
+    lowered = [item.lower() for item in selectors]
+    if "all" in lowered:
+        if len(selectors) > 1:
+            raise ValueError("--interval-select value 'all' must not be combined with other selectors.")
+        return None
+    return selectors
+
+
+def _parse_target_spec(raw: Any, arg_name: str) -> list[str]:
+    if isinstance(raw, list):
+        tokens = [str(item).strip() for item in raw]
+    else:
+        text = str(raw).strip()
+        if not text:
+            raise ValueError(f"{arg_name} must not be empty.")
+        tokens = [item.strip() for item in text.split(",")]
+
+    selected: list[str] = []
+    for token in tokens:
+        if not token:
+            raise ValueError(
+                f"{arg_name} contains an empty target. Use comma-separated values like "
+                "power,heart-rate,interval."
+            )
+        if token == "both":
+            raise ValueError(
+                f"{arg_name} no longer supports 'both'. Use 'power,heart-rate'."
+            )
+        if token not in TARGET_TO_RESULT_KEY:
+            raise ValueError(
+                f"{arg_name} contains unsupported target '{token}'. "
+                "Allowed: power,heart-rate,interval."
+            )
+        if token not in selected:
+            selected.append(token)
+
+    if not selected:
+        raise ValueError(f"{arg_name} resolved to an empty target set.")
+    return selected
+
+
+def _format_target_spec(target_list: list[str]) -> str:
+    return ",".join(target_list)
+
+
 def _build_effective_preset(
     *,
     input_file: str,
     duration: Any,
     max_overlap: float,
     count: int,
-    metrics: str,
+    target: str,
+    interval_select: str,
     inner_intlen: list[float],
     slope_window_m: float,
     hr_zone_tabs: list[float] | None,
@@ -477,10 +616,10 @@ def _build_effective_preset(
 ) -> dict[str, Any]:
     preset: dict[str, Any] = {
         "input_file": input_file,
-        "duration": duration,
         "max_overlap": max_overlap,
         "count": count,
-        "metrics": metrics,
+        "target": target,
+        "interval_select": interval_select,
         "inner_intlen": inner_intlen,
         "slope_window_m": slope_window_m,
         "absolute_timezone": absolute_timezone,
@@ -489,6 +628,8 @@ def _build_effective_preset(
         "bw": bw,
         "no_stdout": no_stdout,
     }
+    if duration is not None:
+        preset["duration"] = duration
     if hr_zone_tabs is not None:
         preset["hr_zone_tabs"] = hr_zone_tabs
     if power_zone_tabs is not None:

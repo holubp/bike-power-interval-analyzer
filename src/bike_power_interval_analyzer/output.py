@@ -20,16 +20,17 @@ def render_text_report(
     """Render a human-readable report for stdout."""
     lines: list[str] = []
 
-    for metric in ("power", "heart_rate"):
+    for metric in ("power", "heart_rate", "interval"):
         intervals = results_by_metric.get(metric)
         if not intervals:
             continue
 
-        title = (
-            "Power-based intervals"
-            if metric == "power"
-            else "Heart-rate-based intervals"
-        )
+        if metric == "power":
+            title = "Power-based intervals"
+        elif metric == "heart_rate":
+            title = "Heart-rate-based intervals"
+        else:
+            title = "File-stored intervals"
         lines.append(_style(title, "1;36", color))
 
         for stat in intervals:

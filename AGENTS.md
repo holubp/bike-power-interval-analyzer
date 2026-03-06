@@ -26,6 +26,8 @@ Tests are in `tests/`.
 - If `--no-stdout` is set, at least one file output must be requested.
 - Segment output now includes relative times, ascent/descent, slope stats (`--slope-window-m`), HR/power min/median/avg/max, and HR/power histograms (profile zones, custom tabs, and fixed bins when configured).
 - Segment output also includes speed min/median/avg/max and non-moving elapsed time based on speed/perimeter thresholds.
+- CLI selector is `--target` with comma-separated values from `power`, `heart-rate`, `interval`; `interval` analyzes file-stored lap/interval metadata instead of fixed window search.
+- `--count` applies to windowed targets only; `interval` returns all stored intervals unless filtered via `--interval-select`.
 - CLI supports JSON presets via `--preset`; preset values act as defaults and explicit CLI args must take precedence.
 - Multiple `--preset` values are supported; presets are applied in order and later presets override earlier ones.
 - CLI can export effective merged settings via `--write-preset` for reproducible reruns.
@@ -63,4 +65,5 @@ pytest -q -k "duration or intervals or tcx"
 ## FIT/TCX Notes
 
 - FIT parsing depends on `fitdecode`.
+- ZIP Garmin exports (`.zip`) are supported by selecting FIT entries (preferring unique `*_ACTIVITY.fit`).
 - TCX parser reads Garmin namespace variants by local XML tag names to remain robust across schema prefixes.

@@ -3,12 +3,15 @@
 from __future__ import annotations
 
 from dataclasses import replace
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
+import shutil
+from tempfile import TemporaryDirectory
 from typing import Any
 from xml.etree import ElementTree as ET
+import zipfile
 
-from .models import ActivityData, DataPoint
+from .models import ActivityData, DataPoint, StoredInterval
 
 
 def parse_activity_file(path: str) -> ActivityData:
@@ -36,9 +39,47 @@ def parse_activity_file(path: str) -> ActivityData:
         return parse_tcx(file_path)
     if suffix == ".fit":
         return parse_fit(file_path)
+    if suffix == ".zip":
+        return parse_fit_zip(file_path)
     raise ValueError(
-        f"Unsupported input file extension '{suffix}'. Expected .tcx or .fit."
+        f"Unsupported input file extension '{suffix}'. Expected .tcx or .fit or .zip."
     )
+
+
+def parse_fit_zip(path: Path) -> ActivityData:
+    """Parse Garmin export ZIP containing FIT data.
+
+    Args:
+        path: ZIP file path.
+
+    Returns:
+        Activity data parsed from selected FIT entry.
+
+    Raises:
+        RuntimeError: If ZIP is invalid, has no FIT file, or selection is ambiguous.
+    """
+    try:
+        with zipfile.ZipFile(path, "r") as archive:
+            members = [
+                info
+                for info in archive.infolist()
+                if not info.is_dir() and info.filename.lower().endswith(".fit")
+            ]
+            if not members:
+                raise RuntimeError(f"ZIP file contains no .fit entry: {path}")
+
+            selected = _select_fit_member(path, members)
+            with TemporaryDirectory(prefix="bike-interval-zip-") as tmp_dir:
+                extracted_path = Path(tmp_dir) / Path(selected.filename).name
+                with archive.open(selected, "r") as src, extracted_path.open("wb") as dst:
+                    shutil.copyfileobj(src, dst)
+                activity = parse_fit(extracted_path)
+            return replace(
+                activity,
+                source_path=f"{path.as_posix()}::{selected.filename}",
+            )
+    except zipfile.BadZipFile as exc:
+        raise RuntimeError(f"Invalid ZIP file: {path}: {exc}") from exc
 
 
 def parse_tcx(path: Path) -> ActivityData:
@@ -61,8 +102,10 @@ def parse_tcx(path: Path) -> ActivityData:
     trackpoints = [e for e in root.iter() if _local_name(e.tag) == "Trackpoint"]
     if not trackpoints:
         raise RuntimeError(f"TCX file has no Trackpoint entries: {path}")
+    laps = [e for e in root.iter() if _local_name(e.tag) == "Lap"]
 
     raw_points: list[dict[str, Any]] = []
+    raw_intervals: list[tuple[datetime, datetime, str]] = []
     for tp in trackpoints:
         timestamp_text = _find_descendant_text(tp, "Time")
         if not timestamp_text:
@@ -89,11 +132,38 @@ def parse_tcx(path: Path) -> ActivityData:
             }
         )
 
+    for lap_index, lap in enumerate(laps, start=1):
+        lap_start = None
+        if "StartTime" in lap.attrib:
+            lap_start = _parse_iso_datetime(lap.attrib["StartTime"])
+        if lap_start is None:
+            lap_start_text = _find_descendant_text(lap, "Time")
+            if lap_start_text:
+                lap_start = _parse_iso_datetime(lap_start_text)
+
+        if lap_start is None:
+            continue
+
+        lap_trackpoints = [e for e in lap.iter() if _local_name(e.tag) == "Trackpoint"]
+        lap_end: datetime | None = None
+        if lap_trackpoints:
+            lap_end_text = _find_descendant_text(lap_trackpoints[-1], "Time")
+            if lap_end_text:
+                lap_end = _parse_iso_datetime(lap_end_text)
+        if lap_end is None:
+            total_time = _to_float(_find_descendant_text(lap, "TotalTimeSeconds"))
+            if total_time is not None and total_time > 0:
+                lap_end = lap_start + _seconds_to_timedelta(total_time)
+
+        if lap_end is None or lap_end <= lap_start:
+            continue
+        raw_intervals.append((lap_start, lap_end, f"lap-{lap_index}"))
+
     if len(raw_points) < 2:
         raise RuntimeError(
             f"TCX file requires at least 2 timed points, found {len(raw_points)} in {path}"
         )
-    return _normalize_points(path.as_posix(), raw_points)
+    return _normalize_points(path.as_posix(), raw_points, raw_intervals=raw_intervals)
 
 
 def parse_fit(path: Path) -> ActivityData:
@@ -118,6 +188,7 @@ def parse_fit(path: Path) -> ActivityData:
     raw_points: list[dict[str, Any]] = []
     hr_zone_tabs: set[float] = set()
     power_zone_tabs: set[float] = set()
+    raw_intervals: list[tuple[datetime, datetime, str]] = []
     try:
         with fitdecode.FitReader(path.as_posix()) as fit:
             for frame in fit:
@@ -144,6 +215,24 @@ def parse_fit(path: Path) -> ActivityData:
                     _add_zone_tabs_from_sequence(
                         power_zone_tabs, fields.get("power_zone_high_boundary")
                     )
+                    continue
+
+                if frame.name == "lap":
+                    lap_start = fields.get("start_time")
+                    if not isinstance(lap_start, datetime):
+                        lap_start = None
+                    lap_end: datetime | None = None
+                    lap_duration_s = _to_float(fields.get("total_timer_time"))
+                    if lap_start is not None and lap_duration_s is not None and lap_duration_s > 0:
+                        lap_end = lap_start + _seconds_to_timedelta(lap_duration_s)
+                    if lap_end is None:
+                        lap_end_candidate = fields.get("timestamp")
+                        if isinstance(lap_end_candidate, datetime):
+                            lap_end = lap_end_candidate
+                    if lap_start is not None and lap_end is not None and lap_end > lap_start:
+                        lap_index = fields.get("message_index")
+                        label = f"lap-{lap_index}" if lap_index is not None else "lap"
+                        raw_intervals.append((lap_start, lap_end, label))
                     continue
 
                 if frame.name != "record":
@@ -185,6 +274,7 @@ def parse_fit(path: Path) -> ActivityData:
         raw_points,
         heart_rate_zone_tabs_bpm=_sorted_zone_tabs(hr_zone_tabs),
         power_zone_tabs_w=_sorted_zone_tabs(power_zone_tabs),
+        raw_intervals=raw_intervals,
     )
 
 
@@ -193,6 +283,7 @@ def _normalize_points(
     raw_points: list[dict[str, Any]],
     heart_rate_zone_tabs_bpm: tuple[float, ...] | None = None,
     power_zone_tabs_w: tuple[float, ...] | None = None,
+    raw_intervals: list[tuple[datetime, datetime, str]] | None = None,
 ) -> ActivityData:
     if len(raw_points) < 2:
         raise RuntimeError("At least two points are required for interval analysis.")
@@ -237,6 +328,12 @@ def _normalize_points(
 
     # Ensure all points reference the canonical elapsed values from the sorted list.
     points = [replace(p, elapsed_s=(p.timestamp - start_time).total_seconds()) for p in points]
+    activity_duration_s = points[-1].elapsed_s
+    stored_intervals = _normalize_stored_intervals(
+        start_time=start_time,
+        activity_duration_s=activity_duration_s,
+        raw_intervals=raw_intervals or [],
+    )
 
     return ActivityData(
         source_path=source_path,
@@ -244,6 +341,7 @@ def _normalize_points(
         points=tuple(points),
         heart_rate_zone_tabs_bpm=heart_rate_zone_tabs_bpm,
         power_zone_tabs_w=power_zone_tabs_w,
+        stored_intervals=stored_intervals,
     )
 
 
@@ -271,6 +369,32 @@ def _parse_iso_datetime(value: str) -> datetime:
         return datetime.fromisoformat(text)
     except ValueError as exc:
         raise RuntimeError(f"Invalid ISO timestamp '{value}'.") from exc
+
+
+def _select_fit_member(path: Path, members: list[zipfile.ZipInfo]) -> zipfile.ZipInfo:
+    """Select FIT member from ZIP with deterministic, assertive rules."""
+    if len(members) == 1:
+        return members[0]
+
+    preferred = [
+        info
+        for info in members
+        if info.filename.lower().endswith("_activity.fit")
+    ]
+    if len(preferred) == 1:
+        return preferred[0]
+
+    names = ", ".join(sorted(info.filename for info in members))
+    raise RuntimeError(
+        "ZIP file contains multiple FIT entries and no unique '*_ACTIVITY.fit' "
+        f"candidate: {path}. Candidates: {names}"
+    )
+
+
+def _seconds_to_timedelta(value: float) -> timedelta:
+    if value < 0:
+        raise RuntimeError(f"Duration seconds must be >= 0, got {value}.")
+    return timedelta(seconds=value)
 
 
 def _local_name(tag: str) -> str:
@@ -347,3 +471,29 @@ def _add_zone_tabs_from_sequence(target: set[float], raw: Any) -> None:
         value = _to_float(item)
         if value is not None:
             target.add(value)
+
+
+def _normalize_stored_intervals(
+    start_time: datetime,
+    activity_duration_s: float,
+    raw_intervals: list[tuple[datetime, datetime, str]],
+) -> tuple[StoredInterval, ...]:
+    normalized: list[StoredInterval] = []
+    for start_dt, end_dt, label in raw_intervals:
+        start_s = (start_dt - start_time).total_seconds()
+        end_s = (end_dt - start_time).total_seconds()
+        start_s = max(0.0, start_s)
+        end_s = min(activity_duration_s, end_s)
+        if end_s <= start_s:
+            continue
+        normalized.append(StoredInterval(start_s=start_s, end_s=end_s, label=label))
+
+    normalized.sort(key=lambda item: (item.start_s, item.end_s))
+    deduped: list[StoredInterval] = []
+    for interval in normalized:
+        if deduped and abs(interval.start_s - deduped[-1].start_s) <= 1e-6 and abs(
+            interval.end_s - deduped[-1].end_s
+        ) <= 1e-6:
+            continue
+        deduped.append(interval)
+    return tuple(deduped)
