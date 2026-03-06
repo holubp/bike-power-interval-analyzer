@@ -41,25 +41,49 @@ def render_text_report(
                 f"| dur={stat.duration_s:.3f}s "
                 f"| len={fmt_optional(stat.length_m, 'm', color)}"
             )
+            slope_summary = _format_summary_fields(
+                stat.minimum_slope_pct,
+                stat.median_slope_pct,
+                stat.average_slope_pct,
+                stat.maximum_slope_pct,
+                "%",
+                color,
+            )
+            speed_summary = _format_summary_fields(
+                stat.minimum_speed_kmh,
+                stat.median_speed_kmh,
+                stat.average_speed_kmh,
+                stat.maximum_speed_kmh,
+                "km/h",
+                color,
+            )
+            power_summary = _format_summary_fields(
+                stat.minimum_power_w,
+                stat.median_power_w,
+                stat.average_power_w,
+                stat.maximum_power_w,
+                "W",
+                color,
+            )
+            hr_summary = _format_summary_fields(
+                stat.minimum_heart_rate_bpm,
+                stat.median_heart_rate_bpm,
+                stat.average_heart_rate_bpm,
+                stat.maximum_heart_rate_bpm,
+                "bpm",
+                color,
+            )
             lines.append(_interval_header(header, color))
             lines.append(
                 (
                     f"  {_label('ascent', color)}={fmt_optional(stat.ascent_m, 'm', color)} "
                     f"{_label('descent', color)}={fmt_optional(stat.descent_m, 'm', color)} "
-                    f"{_label(f'slope[{stat.slope_window_m:g}m]', color)}="
-                    f"{_stat_key('min:', color)}{fmt_optional(stat.minimum_slope_pct, '%', color)} "
-                    f"{_stat_key('med:', color)}{fmt_optional(stat.median_slope_pct, '%', color)} "
-                    f"{_stat_key('avg:', color)}{fmt_optional(stat.average_slope_pct, '%', color)} "
-                    f"{_stat_key('max:', color)}{fmt_optional(stat.maximum_slope_pct, '%', color)}"
+                    f"{_label(f'slope[{stat.slope_window_m:g}m]', color)}={slope_summary}"
                 )
             )
             lines.append(
                 (
-                    f"  {_label('speed', color)}="
-                    f"{_stat_key('min:', color)}{fmt_optional(stat.minimum_speed_kmh, 'km/h', color)} "
-                    f"{_stat_key('med:', color)}{fmt_optional(stat.median_speed_kmh, 'km/h', color)} "
-                    f"{_stat_key('avg:', color)}{fmt_optional(stat.average_speed_kmh, 'km/h', color)} "
-                    f"{_stat_key('max:', color)}{fmt_optional(stat.maximum_speed_kmh, 'km/h', color)}"
+                    f"  {_label('speed', color)}={speed_summary}"
                 )
             )
             lines.append(
@@ -70,20 +94,12 @@ def render_text_report(
             )
             lines.append(
                 (
-                    f"  {_label('power', color)}="
-                    f"{_stat_key('min:', color)}{fmt_optional(stat.minimum_power_w, 'W', color)} "
-                    f"{_stat_key('med:', color)}{fmt_optional(stat.median_power_w, 'W', color)} "
-                    f"{_stat_key('avg:', color)}{fmt_optional(stat.average_power_w, 'W', color)} "
-                    f"{_stat_key('max:', color)}{fmt_optional(stat.maximum_power_w, 'W', color)}"
+                    f"  {_label('power', color)}={power_summary}"
                 )
             )
             lines.append(
                 (
-                    f"  {_label('hr', color)}="
-                    f"{_stat_key('min:', color)}{fmt_optional(stat.minimum_heart_rate_bpm, 'bpm', color)} "
-                    f"{_stat_key('med:', color)}{fmt_optional(stat.median_heart_rate_bpm, 'bpm', color)} "
-                    f"{_stat_key('avg:', color)}{fmt_optional(stat.average_heart_rate_bpm, 'bpm', color)} "
-                    f"{_stat_key('max:', color)}{fmt_optional(stat.maximum_heart_rate_bpm, 'bpm', color)}"
+                    f"  {_label('hr', color)}={hr_summary}"
                 )
             )
 
@@ -306,6 +322,27 @@ def fmt_optional(value: float | None, unit: str, color: bool = False) -> str:
     if value is None:
         return _style("n/a", "37", color)
     return f"{value:.2f}{_unit(unit, color)}"
+
+
+def _format_summary_fields(
+    minimum: float | None,
+    median: float | None,
+    average: float | None,
+    maximum: float | None,
+    unit: str,
+    color: bool,
+) -> str:
+    """Format min/avg/med/max fields with middle values ordered by value."""
+    middle_items = [("med", median), ("avg", average)]
+    middle_items.sort(
+        key=lambda item: (float("inf") if item[1] is None else item[1], item[0])
+    )
+
+    ordered_items = [("min", minimum), *middle_items, ("max", maximum)]
+    return " ".join(
+        f"{_stat_key(f'{label}:', color)}{fmt_optional(value, unit, color)}"
+        for label, value in ordered_items
+    )
 
 
 def _append_histogram_block(

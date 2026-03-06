@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+import re
 
 import pytest
 
@@ -454,7 +455,10 @@ def test_cli_accepts_comma_list_values_from_preset_strings(tmp_path: Path) -> No
     assert payload["power_zone_tabs"] == [190.0, 250.0]
 
 
-def test_cli_stdout_stat_order_is_min_med_avg_max(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
+def test_cli_stdout_stat_middle_values_are_sorted_numerically(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
     input_file = tmp_path / "sample.tcx"
     _write_tcx(input_file)
 
@@ -475,10 +479,9 @@ def test_cli_stdout_stat_order_is_min_med_avg_max(tmp_path: Path, capsys: pytest
 
     for prefix in ("  speed=", "  power=", "  hr="):
         line = next(line for line in output_text.splitlines() if line.startswith(prefix))
-        assert "min:" in line
-        assert " med:" in line
-        assert " avg:" in line
-        assert " max:" in line
-        assert line.index("min:") < line.index(" med:")
-        assert line.index(" med:") < line.index(" avg:")
-        assert line.index(" avg:") < line.index(" max:")
+        items = re.findall(r"(min|med|avg|max):(-?\d+(?:\.\d+)?)", line)
+        assert len(items) == 4
+        assert items[0][0] == "min"
+        assert items[-1][0] == "max"
+        assert {items[1][0], items[2][0]} == {"med", "avg"}
+        assert float(items[1][1]) <= float(items[2][1])
