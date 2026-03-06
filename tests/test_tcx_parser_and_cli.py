@@ -242,16 +242,13 @@ def test_cli_write_preset_exports_effective_config(tmp_path: Path) -> None:
             "--target",
             "power,heart-rate",
             "--inner-intlen",
-            "5",
-            "10",
+            "5,10",
             "--slope-window-m",
             "25",
             "--hr-zone-tabs",
-            "145",
-            "160",
+            "145,160",
             "--power-zone-tabs",
-            "190",
-            "250",
+            "190,250",
             "--hr-hist-bins",
             "4",
             "--power-hist-bins",
@@ -407,3 +404,81 @@ def test_cli_rejects_legacy_both_target(tmp_path: Path) -> None:
     with pytest.raises(SystemExit) as exc_info:
         main([str(input_file), "--target", "both", "--duration", "00:10"])
     assert exc_info.value.code == 2
+
+
+def test_cli_rejects_legacy_space_separated_list_syntax(tmp_path: Path) -> None:
+    input_file = tmp_path / "sample.tcx"
+    _write_tcx(input_file)
+    with pytest.raises(SystemExit) as exc_info:
+        main(
+            [
+                str(input_file),
+                "--duration",
+                "00:10",
+                "--target",
+                "power",
+                "--inner-intlen",
+                "5",
+                "10",
+            ]
+        )
+    assert exc_info.value.code == 2
+
+
+def test_cli_accepts_comma_list_values_from_preset_strings(tmp_path: Path) -> None:
+    input_file = tmp_path / "sample.tcx"
+    _write_tcx(input_file)
+    preset_path = tmp_path / "preset_strings.json"
+    output_json = tmp_path / "preset_strings_out.json"
+    preset_path.write_text(
+        json.dumps(
+            {
+                "input_file": str(input_file),
+                "duration": "00:12",
+                "target": "power,heart-rate",
+                "inner_intlen": "6,12",
+                "hr_zone_tabs": "140,160",
+                "power_zone_tabs": "190,250",
+                "no_stdout": True,
+                "json_out": str(output_json),
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    exit_code = main(["--preset", str(preset_path)])
+    assert exit_code == 0
+    payload = json.loads(output_json.read_text(encoding="utf-8"))
+    assert payload["inner_interval_lengths_s"] == [6.0, 12.0]
+    assert payload["hr_zone_tabs"] == [140.0, 160.0]
+    assert payload["power_zone_tabs"] == [190.0, 250.0]
+
+
+def test_cli_stdout_stat_order_is_min_med_avg_max(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
+    input_file = tmp_path / "sample.tcx"
+    _write_tcx(input_file)
+
+    exit_code = main(
+        [
+            str(input_file),
+            "--duration",
+            "00:10",
+            "--count",
+            "1",
+            "--target",
+            "power",
+            "--bw",
+        ]
+    )
+    assert exit_code == 0
+    output_text = capsys.readouterr().out
+
+    for prefix in ("  speed=", "  power=", "  hr="):
+        line = next(line for line in output_text.splitlines() if line.startswith(prefix))
+        assert "min:" in line
+        assert " med:" in line
+        assert " avg:" in line
+        assert " max:" in line
+        assert line.index("min:") < line.index(" med:")
+        assert line.index(" med:") < line.index(" avg:")
+        assert line.index(" avg:") < line.index(" max:")

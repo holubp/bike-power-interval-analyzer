@@ -59,7 +59,7 @@ def build_argument_parser(defaults: dict[str, Any] | None = None) -> argparse.Ar
         prog="bike-intervals",
         description=(
             "Identify maximum-average power and/or heart-rate intervals "
-            "from TCX and FIT files."
+            "from TCX, FIT, and Garmin Connect ZIP files."
         ),
     )
     parser.add_argument(
@@ -77,7 +77,7 @@ def build_argument_parser(defaults: dict[str, Any] | None = None) -> argparse.Ar
         "input_file",
         nargs="?",
         default=default_values.get("input_file"),
-        help="Path to .tcx or .fit file",
+        help="Path to .tcx, .fit, or Garmin Connect .zip export",
     )
     parser.add_argument(
         "-d",
@@ -115,12 +115,13 @@ def build_argument_parser(defaults: dict[str, Any] | None = None) -> argparse.Ar
     )
     parser.add_argument(
         "--inner-intlen",
-        nargs="*",
+        nargs="?",
+        const="",
         default=default_values.get("inner_intlen"),
-        metavar="SECONDS",
+        metavar="SECONDS_CSV",
         help=(
-            "Inner floating windows in seconds/MM:SS/HH:MM:SS (space or comma separated). "
-            "Default: 10. Pass '--inner-intlen' with no values for an empty list."
+            "Inner floating windows in seconds/MM:SS/HH:MM:SS as comma-separated values "
+            "(e.g. 3,10,60). Default: 10. Pass '--inner-intlen' with no value for an empty list."
         ),
     )
     parser.add_argument(
@@ -139,17 +140,15 @@ def build_argument_parser(defaults: dict[str, Any] | None = None) -> argparse.Ar
     )
     parser.add_argument(
         "--hr-zone-tabs",
-        nargs="+",
         default=default_values.get("hr_zone_tabs"),
-        metavar="BPM",
-        help="Custom HR zone tabs (space or comma separated, e.g. 120 140 160 or 120,140,160)",
+        metavar="BPM_CSV",
+        help="Custom HR zone tabs as comma-separated values (e.g. 120,140,160)",
     )
     parser.add_argument(
         "--power-zone-tabs",
-        nargs="+",
         default=default_values.get("power_zone_tabs"),
-        metavar="WATTS",
-        help="Custom power zone tabs (space or comma separated, e.g. 150 220 300 or 150,220,300)",
+        metavar="WATTS_CSV",
+        help="Custom power zone tabs as comma-separated values (e.g. 150,220,300)",
     )
     parser.add_argument(
         "--hr-hist-bins",
@@ -461,8 +460,10 @@ def _validate_preset_types(preset: dict[str, Any], source: str) -> None:
             raise ValueError(f"Preset key '{key}' must be boolean in {source}.")
 
     for key in ("inner_intlen", "hr_zone_tabs", "power_zone_tabs"):
-        if key in preset and not isinstance(preset[key], list):
-            raise ValueError(f"Preset key '{key}' must be an array in {source}.")
+        if key in preset and not isinstance(preset[key], (list, str)):
+            raise ValueError(
+                f"Preset key '{key}' must be an array or comma-separated string in {source}."
+            )
 
     for key in ("input_file", "target", "interval_select", "csv_out", "json_out", "gpx_out"):
         if key in preset and not isinstance(preset[key], str):
@@ -520,16 +521,31 @@ def _parse_zone_tabs(raw_values: list[Any] | None, arg_name: str) -> list[float]
     return sorted_tabs
 
 
-def _expand_csv_list(raw_values: list[Any] | None, arg_name: str) -> list[str] | None:
-    """Expand mixed space/comma list values into a flat string list."""
+def _expand_csv_list(raw_values: Any, arg_name: str) -> list[str] | None:
+    """Expand comma-separated values from CLI/preset into a flat string list."""
     if raw_values is None:
         return None
+    if isinstance(raw_values, str):
+        candidates = [raw_values]
+    elif isinstance(raw_values, list):
+        candidates = [str(item) for item in raw_values]
+    else:
+        candidates = [str(raw_values)]
+
     expanded: list[str] = []
-    for raw in raw_values:
-        text = str(raw).strip()
+    for raw in candidates:
+        text = raw.strip()
         if not text:
             continue
-        parts = [part.strip() for part in text.split(",")]
+        if "," in text:
+            parts = [part.strip() for part in text.split(",")]
+        else:
+            if any(ch.isspace() for ch in text):
+                raise ValueError(
+                    f"{arg_name} must use comma-separated values "
+                    "(e.g. 10,30,60), not space-separated values."
+                )
+            parts = [text]
         for part in parts:
             if not part:
                 raise ValueError(f"{arg_name} contains an empty comma-separated value.")

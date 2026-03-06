@@ -28,6 +28,7 @@ Tests are in `tests/`.
 - Segment output also includes speed min/median/avg/max and non-moving elapsed time based on speed/perimeter thresholds.
 - CLI selector is `--target` with comma-separated values from `power`, `heart-rate`, `interval`; `interval` analyzes file-stored lap/interval metadata instead of fixed window search.
 - `--count` applies to windowed targets only; `interval` returns all stored intervals unless filtered via `--interval-select`.
+- List-style CLI options use comma-separated syntax only (`--target`, `--inner-intlen`, `--hr-zone-tabs`, `--power-zone-tabs`, `--interval-select`).
 - CLI supports JSON presets via `--preset`; preset values act as defaults and explicit CLI args must take precedence.
 - Multiple `--preset` values are supported; presets are applied in order and later presets override earlier ones.
 - CLI can export effective merged settings via `--write-preset` for reproducible reruns.

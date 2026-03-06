@@ -14,6 +14,7 @@ Run directly from the repository root without installing:
 ```bash
 python3 run.py --help
 python3 run.py INPUT_FILE --duration 05:00 --target power,heart-rate
+python3 run.py INPUT_FILE --duration 10:00 --target power --inner-intlen 3,10,60
 python3 run.py --preset presets/base.json --preset presets/user.json --target power
 python3 run.py 22069312334.zip --duration 10:00 --target power
 python3 run.py INPUT_FILE --target interval --interval-select all

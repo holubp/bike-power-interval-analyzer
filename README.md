@@ -116,7 +116,7 @@ bike-intervals ride.fit \
   --max-overlap 0.2 \
   --count 5 \
   --target power,heart-rate \
-  --inner-intlen 10 30 60 \
+  --inner-intlen 10,30,60 \
   --csv-out out/intervals.csv \
   --json-out out/intervals.json \
   --gpx-out out/intervals.gpx
@@ -144,18 +144,18 @@ bike-intervals ride.fit \
   - Example: `--interval-select 2,lap-5`
 - `--inner-intlen`:
   - Inner floating windows for nested max-average values
-  - Space-separated and comma-separated forms are both accepted
+  - Comma-separated values only
   - Default is `[10]`
-  - Pass `--inner-intlen` with no values for an empty list
+  - Pass `--inner-intlen` with no value for an empty list
 - `--slope-window-m`:
   - Floating distance window length in meters for slope calculation
   - Default `30`
-- `--hr-zone-tabs BPM ...`:
+- `--hr-zone-tabs BPM_CSV`:
   - Custom HR zone tabs; histogram bins become `<tab1`, `[tab_i,tab_i+1)`, `>=last_tab`
-  - Space-separated and comma-separated forms are both accepted
-- `--power-zone-tabs WATTS ...`:
+  - Comma-separated values only, e.g. `--hr-zone-tabs 120,140,160`
+- `--power-zone-tabs WATTS_CSV`:
   - Custom power zone tabs with the same tab semantics
-  - Space-separated and comma-separated forms are both accepted
+  - Comma-separated values only, e.g. `--power-zone-tabs 150,220,300`
 - `--hr-hist-bins`:
   - Number of bins for heart-rate histogram
 - `--power-hist-bins`:
@@ -241,3 +241,4 @@ Test suite covers:
 - FIT parsing uses `fitdecode`.
 - Average metric calculations require full metric coverage for each interval.
 - GPX export requires available GPS coordinates within identified intervals.
+- Beginner walkthrough: see [TUTORIAL.md](TUTORIAL.md).

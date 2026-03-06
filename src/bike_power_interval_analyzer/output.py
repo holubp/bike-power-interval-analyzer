@@ -31,68 +31,79 @@ def render_text_report(
             title = "Heart-rate-based intervals"
         else:
             title = "File-stored intervals"
-        lines.append(_style(title, "1;36", color))
+        lines.append(_section_title(title, color))
 
         for stat in intervals:
+            header = (
+                f"#{stat.rank} abs={fmt_hms_ms(stat.start_time, absolute_timezone)}-"
+                f"{fmt_hms_ms(stat.end_time, absolute_timezone)} "
+                f"rel={stat.relative_start_hms}-{stat.relative_end_hms} "
+                f"| dur={stat.duration_s:.3f}s "
+                f"| len={fmt_optional(stat.length_m, 'm', color)}"
+            )
+            lines.append(_interval_header(header, color))
             lines.append(
                 (
-                    f"#{stat.rank} abs={fmt_hms_ms(stat.start_time, absolute_timezone)}-"
-                    f"{fmt_hms_ms(stat.end_time, absolute_timezone)} "
-                    f"rel={stat.relative_start_hms}-{stat.relative_end_hms} "
-                    f"| dur={stat.duration_s:.3f}s | len={fmt_optional(stat.length_m, 'm')}"
+                    f"  {_label('ascent', color)}={fmt_optional(stat.ascent_m, 'm', color)} "
+                    f"{_label('descent', color)}={fmt_optional(stat.descent_m, 'm', color)} "
+                    f"{_label(f'slope[{stat.slope_window_m:g}m]', color)}="
+                    f"{_stat_key('min:', color)}{fmt_optional(stat.minimum_slope_pct, '%', color)} "
+                    f"{_stat_key('med:', color)}{fmt_optional(stat.median_slope_pct, '%', color)} "
+                    f"{_stat_key('avg:', color)}{fmt_optional(stat.average_slope_pct, '%', color)} "
+                    f"{_stat_key('max:', color)}{fmt_optional(stat.maximum_slope_pct, '%', color)}"
                 )
             )
             lines.append(
                 (
-                    f"  ascent={fmt_optional(stat.ascent_m, 'm')} "
-                    f"descent={fmt_optional(stat.descent_m, 'm')} "
-                    f"slope[{stat.slope_window_m:g}m]=min {fmt_optional(stat.minimum_slope_pct, '%')} "
-                    f"med {fmt_optional(stat.median_slope_pct, '%')} "
-                    f"avg {fmt_optional(stat.average_slope_pct, '%')} "
-                    f"max {fmt_optional(stat.maximum_slope_pct, '%')}"
+                    f"  {_label('speed', color)}="
+                    f"{_stat_key('min:', color)}{fmt_optional(stat.minimum_speed_kmh, 'km/h', color)} "
+                    f"{_stat_key('med:', color)}{fmt_optional(stat.median_speed_kmh, 'km/h', color)} "
+                    f"{_stat_key('avg:', color)}{fmt_optional(stat.average_speed_kmh, 'km/h', color)} "
+                    f"{_stat_key('max:', color)}{fmt_optional(stat.maximum_speed_kmh, 'km/h', color)}"
                 )
             )
             lines.append(
                 (
-                    f"  speed=min {fmt_optional(stat.minimum_speed_kmh, 'km/h')} "
-                    f"avg {fmt_optional(stat.average_speed_kmh, 'km/h')} "
-                    f"med {fmt_optional(stat.median_speed_kmh, 'km/h')} "
-                    f"max {fmt_optional(stat.maximum_speed_kmh, 'km/h')}"
+                    f"  {_label('non_moving', color)}={fmt_optional(stat.non_moving_time_s, 's', color)} "
+                    f"{_label(f'(speed<={stat.non_moving_speed_threshold_kmh:g}km/h, perimeter<={stat.non_moving_perimeter_m:g}m)', color)}"
                 )
             )
             lines.append(
                 (
-                    f"  non_moving={fmt_optional(stat.non_moving_time_s, 's')} "
-                    f"(speed<={stat.non_moving_speed_threshold_kmh:g}km/h, "
-                    f"perimeter<={stat.non_moving_perimeter_m:g}m)"
+                    f"  {_label('power', color)}="
+                    f"{_stat_key('min:', color)}{fmt_optional(stat.minimum_power_w, 'W', color)} "
+                    f"{_stat_key('med:', color)}{fmt_optional(stat.median_power_w, 'W', color)} "
+                    f"{_stat_key('avg:', color)}{fmt_optional(stat.average_power_w, 'W', color)} "
+                    f"{_stat_key('max:', color)}{fmt_optional(stat.maximum_power_w, 'W', color)}"
                 )
             )
             lines.append(
                 (
-                    f"  power=min {fmt_optional(stat.minimum_power_w, 'W')} "
-                    f"avg {fmt_optional(stat.average_power_w, 'W')} "
-                    f"med {fmt_optional(stat.median_power_w, 'W')} "
-                    f"max {fmt_optional(stat.maximum_power_w, 'W')}"
-                )
-            )
-            lines.append(
-                (
-                    f"  hr=min {fmt_optional(stat.minimum_heart_rate_bpm, 'bpm')} "
-                    f"avg {fmt_optional(stat.average_heart_rate_bpm, 'bpm')} "
-                    f"med {fmt_optional(stat.median_heart_rate_bpm, 'bpm')} "
-                    f"max {fmt_optional(stat.maximum_heart_rate_bpm, 'bpm')}"
+                    f"  {_label('hr', color)}="
+                    f"{_stat_key('min:', color)}{fmt_optional(stat.minimum_heart_rate_bpm, 'bpm', color)} "
+                    f"{_stat_key('med:', color)}{fmt_optional(stat.median_heart_rate_bpm, 'bpm', color)} "
+                    f"{_stat_key('avg:', color)}{fmt_optional(stat.average_heart_rate_bpm, 'bpm', color)} "
+                    f"{_stat_key('max:', color)}{fmt_optional(stat.maximum_heart_rate_bpm, 'bpm', color)}"
                 )
             )
 
-            _append_histogram_block(lines, "heart-rate profile zones", stat.heart_rate_hist_profile_zones)
-            _append_histogram_block(lines, "heart-rate custom zones", stat.heart_rate_hist_cmd_zones)
-            _append_histogram_block(lines, "heart-rate bins", stat.heart_rate_hist_bins)
-            _append_histogram_block(lines, "power profile zones", stat.power_hist_profile_zones)
-            _append_histogram_block(lines, "power custom zones", stat.power_hist_cmd_zones)
-            _append_histogram_block(lines, "power bins", stat.power_hist_bins)
+            _append_histogram_block(
+                lines, "heart-rate profile zones", stat.heart_rate_hist_profile_zones, color
+            )
+            _append_histogram_block(
+                lines, "heart-rate custom zones", stat.heart_rate_hist_cmd_zones, color
+            )
+            _append_histogram_block(lines, "heart-rate bins", stat.heart_rate_hist_bins, color)
+            _append_histogram_block(
+                lines, "power profile zones", stat.power_hist_profile_zones, color
+            )
+            _append_histogram_block(
+                lines, "power custom zones", stat.power_hist_cmd_zones, color
+            )
+            _append_histogram_block(lines, "power bins", stat.power_hist_bins, color)
 
             if stat.inner_power_max_avg_w or stat.inner_heart_rate_max_avg_bpm:
-                lines.append("  inner windows:")
+                lines.append(f"  {_label('inner windows', color)}:")
                 keys = sorted(
                     set(stat.inner_power_max_avg_w.keys())
                     | set(stat.inner_heart_rate_max_avg_bpm.keys())
@@ -100,9 +111,9 @@ def render_text_report(
                 for inner in keys:
                     lines.append(
                         (
-                            f"    {inner:.3f}s -> "
-                            f"power={fmt_optional(stat.inner_power_max_avg_w.get(inner), 'W')} "
-                            f"hr={fmt_optional(stat.inner_heart_rate_max_avg_bpm.get(inner), 'bpm')}"
+                            f"    {_style(f'{inner:.3f}s', '37', color)} -> "
+                            f"power={fmt_optional(stat.inner_power_max_avg_w.get(inner), 'W', color)} "
+                            f"hr={fmt_optional(stat.inner_heart_rate_max_avg_bpm.get(inner), 'bpm', color)}"
                         )
                     )
         lines.append("")
@@ -290,23 +301,24 @@ def fmt_hms_ms(value: datetime, absolute_timezone: str = "local") -> str:
     return dt.strftime("%H:%M:%S.%f")[:-3]
 
 
-def fmt_optional(value: float | None, unit: str) -> str:
+def fmt_optional(value: float | None, unit: str, color: bool = False) -> str:
     """Format optional numeric values for text report."""
     if value is None:
-        return "n/a"
-    return f"{value:.2f}{unit}"
+        return _style("n/a", "37", color)
+    return f"{value:.2f}{_unit(unit, color)}"
 
 
 def _append_histogram_block(
     lines: list[str],
     title: str,
     histogram: Mapping[str, float],
+    color: bool,
 ) -> None:
     if not histogram:
         return
-    lines.append(f"  {title}:")
+    lines.append(f"  {_label(title, color)}:")
     for key, value in histogram.items():
-        lines.append(f"    {key} -> {value:.2f}s")
+        lines.append(f"    {_style(key, '37', color)} -> {value:.2f}{_unit('s', color)}")
 
 
 def _scalarize_csv_value(value: object) -> object:
@@ -319,3 +331,23 @@ def _style(text: str, ansi_code: str, enabled: bool) -> str:
     if not enabled:
         return text
     return f"\x1b[{ansi_code}m{text}\x1b[0m"
+
+
+def _section_title(text: str, color: bool) -> str:
+    return _style(text, "1;97", color)
+
+
+def _interval_header(text: str, color: bool) -> str:
+    return _style(text, "36", color)
+
+
+def _label(text: str, color: bool) -> str:
+    return _style(text, "38;5;250", color)
+
+
+def _stat_key(text: str, color: bool) -> str:
+    return _style(text, "38;5;250", color)
+
+
+def _unit(text: str, color: bool) -> str:
+    return _style(text, "38;5;250", color)
