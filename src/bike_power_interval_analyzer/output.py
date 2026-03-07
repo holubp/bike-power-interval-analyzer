@@ -56,7 +56,7 @@ def render_text_report(
                 f"#{stat.rank} abs={fmt_hms_ms(stat.start_time, absolute_timezone)}-"
                 f"{fmt_hms_ms(stat.end_time, absolute_timezone)} "
                 f"rel={stat.relative_start_hms}-{stat.relative_end_hms} "
-                f"| dur={stat.duration_s:.3f}s "
+                f"| dur={stat.duration_s:.3f}s ({_format_duration_hms(stat.duration_s)}) "
                 f"| len={fmt_optional(stat.length_m, 'm', color)}"
             )
             slope_summary = _format_summary_fields(
@@ -333,6 +333,14 @@ def fmt_hms_ms(value: datetime, absolute_timezone: str = "local") -> str:
             f"got '{absolute_timezone}'."
         )
     return dt.strftime("%H:%M:%S.%f")[:-3]
+
+
+def _format_duration_hms(duration_s: float) -> str:
+    """Format duration as HH:MM:SS using truncated whole seconds."""
+    whole_seconds = int(duration_s)
+    hours, remainder = divmod(whole_seconds, 3600)
+    minutes, seconds = divmod(remainder, 60)
+    return f"{hours:02d}:{minutes:02d}:{seconds:02d}"
 
 
 def fmt_optional(value: float | None, unit: str, color: bool = False) -> str:

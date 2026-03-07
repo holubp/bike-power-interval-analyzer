@@ -507,6 +507,7 @@ def test_cli_stdout_stat_middle_values_are_sorted_numerically(
     )
     assert exit_code == 0
     output_text = capsys.readouterr().out
+    assert "| dur=10.000s (00:00:10) |" in output_text
 
     for prefix in ("  speed=", "  power=", "  hr="):
         line = next(line for line in output_text.splitlines() if line.startswith(prefix))
