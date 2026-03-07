@@ -26,8 +26,11 @@ Tests are in `tests/`.
 - If `--no-stdout` is set, at least one file output must be requested.
 - Segment output now includes relative times, ascent/descent, slope stats (`--slope-window-m`), HR/power min/median/avg/max, and HR/power histograms (profile zones, custom tabs, and fixed bins when configured).
 - Segment output also includes speed min/median/avg/max and non-moving elapsed time based on speed/perimeter thresholds.
-- CLI selector is `--target` with comma-separated values from `power`, `heart-rate`, `interval`; `interval` analyzes file-stored lap/interval metadata instead of fixed window search.
-- `--count` applies to windowed targets only; `interval` returns all stored intervals unless filtered via `--interval-select`.
+- CLI selector is `--target` with comma-separated values from `power`, `power-max`, `hr`, `hr-max`, `interval`; `interval` analyzes file-stored lap/interval metadata instead of fixed window search.
+- `power`/`hr` use fixed windows of exactly `--duration`; `power-max`/`hr-max` use any window at least `--duration` long.
+- Fixed-duration `power`/`hr` search must consider continuous starts at metric-boundary breakpoints rather than only sampled timestamps.
+- `--count` applies to computed targets only; `interval` returns all stored intervals unless filtered via `--interval-select`.
+- For `power-max` and `hr-max`, overlap is evaluated against the shorter of the two compared intervals.
 - List-style CLI options use comma-separated syntax only (`--target`, `--inner-intlen`, `--hr-zone-tabs`, `--power-zone-tabs`, `--interval-select`).
 - CLI supports JSON presets via `--preset`; preset values act as defaults and explicit CLI args must take precedence.
 - Multiple `--preset` values are supported; presets are applied in order and later presets override earlier ones.

@@ -6,7 +6,8 @@ This guide explains how to run the tool without Python packaging setup and how t
 
 It finds your strongest segments in a workout file:
 - top average power windows
-- top average heart-rate windows
+- top average hr windows
+- top max-average windows of at least a chosen duration
 - file-stored laps/intervals (if your device recorded them)
 
 It can read:
@@ -45,7 +46,13 @@ python3 run.py workout.fit --duration 10:00 --max-overlap 0.3 -n 5 --target powe
 Power + heart-rate ranking together:
 
 ```bash
-python3 run.py workout.fit --duration 08:00 --target power,heart-rate
+python3 run.py workout.fit --duration 08:00 --target power,hr
+```
+
+Minimum-duration max-average search:
+
+```bash
+python3 run.py workout.fit --duration 08:00 --target power-max,hr-max
 ```
 
 Use short inner windows (comma-separated list):
@@ -55,7 +62,7 @@ python3 run.py workout.fit --duration 10:00 --target power --inner-intlen 3,10,6
 ```
 
 Important: list options are comma-separated only.
-Examples: `power,heart-rate`, `3,10,60`, `130,150,170`.
+Examples: `power,hr`, `power-max,hr-max`, `3,10,60`, `130,150,170`.
 
 ## 4) Use intervals/laps from the file
 
@@ -81,7 +88,7 @@ JSON + CSV + GPX:
 ```bash
 python3 run.py workout.fit \
   --duration 10:00 \
-  --target power,heart-rate \
+  --target power,hr \
   --csv-out out/intervals.csv \
   --json-out out/intervals.json \
   --gpx-out out/intervals.gpx
@@ -102,7 +109,7 @@ Create `presets/base.json`:
   "duration": "10:00",
   "max_overlap": 0.3,
   "count": 8,
-  "target": "power,heart-rate",
+  "target": "power,hr",
   "inner_intlen": [3, 10, 60],
   "hr_zone_tabs": [130, 150, 170],
   "power_zone_tabs": [170, 230, 290]
@@ -143,13 +150,14 @@ Meaning:
 - `abs`: clock time of the interval.
 - `rel`: time from workout start.
 - `dur`: duration in seconds.
+- for `power-max` and `hr-max`, `dur` can be longer than the minimum requested duration
 - `len`: covered distance.
 - `slope[...]`: gradient stats over moving window.
 - `non_moving`: stoppage time under configured speed/perimeter thresholds.
 
 ## 8) Common beginner mistakes
 
-- Missing `--duration` when using `power` or `heart-rate` target.
+- Missing `--duration` when using `power`, `power-max`, `hr`, or `hr-max`.
 - Using spaces instead of commas for list options.
 - Using `--no-stdout` without any output file (`--json-out`, `--csv-out`, or `--gpx-out`).
 
@@ -164,7 +172,7 @@ python3 run.py ride.fit --duration 20:00 --target power --inner-intlen 10,60 --m
 Running HR segment check:
 
 ```bash
-python3 run.py run.fit --duration 05:00 --target heart-rate --max-overlap 0.2 -n 6
+python3 run.py run.fit --duration 05:00 --target hr --max-overlap 0.2 -n 6
 ```
 
 Garmin Connect ZIP directly:

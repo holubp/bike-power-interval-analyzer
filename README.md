@@ -1,6 +1,6 @@
 # Bike Power Interval Analyzer
 
-CLI tool to identify maximum-average interval windows for **power**, **heart rate**, and/or file-stored intervals from Garmin **TCX** and **FIT** files.
+CLI tool to identify top interval windows for **power**, **hr**, **power-max**, **hr-max**, and/or file-stored intervals from Garmin **TCX** and **FIT** files.
 
 ## Features
 
@@ -11,7 +11,7 @@ CLI tool to identify maximum-average interval windows for **power**, **heart rat
   - `HH:MM:SS` (`01:02:30`)
 - Configurable maximum overlap between selected intervals (`0 <= overlap < 1`)
 - Configurable number of intervals per analyzed metric
-- Analyze any combination of power, heart rate, and file intervals
+- Analyze any combination of `power`, `power-max`, `hr`, `hr-max`, and file intervals
 - Text report to STDOUT (ANSI color by default, optional black/white)
 - Optional suppression of STDOUT
 - Optional CSV output
@@ -82,7 +82,7 @@ sh bike-intervals INPUT_FILE --duration DURATION [options]
 You can define defaults in JSON preset files and still override any of them on the command line.
 
 ```bash
-python3 run.py --preset presets/threshold.json --count 5 --target power,heart-rate
+python3 run.py --preset presets/threshold.json --count 5 --target power,hr
 python3 run.py --preset presets/base.json --preset presets/user.json --preset presets/workout.json
 python3 run.py ride.fit --duration 05:00 --write-preset presets/new.json
 ```
@@ -120,7 +120,7 @@ bike-intervals ride.fit \
   --duration 05:00 \
   --max-overlap 0.2 \
   --count 5 \
-  --target power,heart-rate \
+  --target power,hr \
   --inner-intlen 10,30,60 \
   --csv-out out/intervals.csv \
   --json-out out/intervals.json \
@@ -133,17 +133,23 @@ bike-intervals ride.fit \
   - Path to `.tcx`, `.fit`, or Garmin Connect `.zip` export containing FIT
 - `-d, --duration` (required):
   - Interval duration (`seconds`, `MM:SS`, `HH:MM:SS`)
-  - Required when target includes `power` or `heart-rate`; ignored for interval-only runs
+  - Exact duration for `power` and `hr`
+  - Minimum duration for `power-max` and `hr-max`
+  - Required when target includes anything except `interval`
 - `--max-overlap`:
   - Maximum overlap proportion in `[0, 1)`
   - `0` means no overlap
 - `-n, --count`:
-  - Number of intervals to identify for window-based targets (`power`/`heart-rate`)
+  - Number of intervals to identify for computed targets (`power`/`power-max`/`hr`/`hr-max`)
   - Not applied to `interval` target (stored intervals are all returned unless filtered)
 - `--target`:
-  - Comma-separated list from `power`, `heart-rate`, `interval`
-  - Example: `--target power,heart-rate` or `--target interval`
+  - Comma-separated list from `power`, `power-max`, `hr`, `hr-max`, `interval`
+  - Example: `--target power,hr` or `--target power-max,hr-max`
+  - `power` and `hr` search fixed windows of exactly `--duration`
+  - `power-max` and `hr-max` search any window with duration at least `--duration`
+  - `power` and `hr` evaluate continuous window starts at metric-boundary breakpoints, not only recorded sample timestamps
   - `interval` uses intervals/laps stored in the source file metadata
+  - For `power-max` and `hr-max`, overlap is limited against the shorter of the two compared intervals
 - `--interval-select`:
   - For `interval` target: `all` (default) or comma-separated labels/1-based indices
   - Example: `--interval-select 2,lap-5`

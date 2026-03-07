@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from bisect import bisect_left, bisect_right
+from collections import deque
 from dataclasses import dataclass
 from datetime import timedelta
 import math
@@ -36,6 +37,7 @@ def identify_top_intervals(
     count: int,
     analyzed_metric: str,
     inner_interval_lengths_s: Iterable[float],
+    output_metric: str | None = None,
     slope_window_m: float = 30.0,
     hr_zone_tabs_bpm: Iterable[float] | None = None,
     power_zone_tabs_w: Iterable[float] | None = None,
@@ -53,6 +55,7 @@ def identify_top_intervals(
         count: Maximum number of intervals to return.
         analyzed_metric: Either ``"power"`` or ``"heart_rate"``.
         inner_interval_lengths_s: Inner floating windows to compute.
+        output_metric: Label stored in the returned stats payload.
         slope_window_m: Floating distance window in meters for slope stats.
         hr_zone_tabs_bpm: Optional command-line HR zone tabs.
         power_zone_tabs_w: Optional command-line power zone tabs.
@@ -119,16 +122,12 @@ def identify_top_intervals(
             f"No valid intervals with full {analyzed_metric} coverage for duration {duration_s:.3f}s."
         )
 
-    selected: list[IntervalWindow] = []
-    max_overlap_s = max_overlap_ratio * duration_s
-    for candidate in candidates:
-        if all(
-            _overlap_seconds(candidate, existing) <= max_overlap_s + EPSILON
-            for existing in selected
-        ):
-            selected.append(candidate)
-        if len(selected) >= count:
-            break
+    selected = _select_interval_windows(
+        candidates=candidates,
+        max_overlap_ratio=max_overlap_ratio,
+        count=count,
+        fixed_reference_duration_s=duration_s,
+    )
 
     if not selected:
         raise RuntimeError("No intervals met the overlap constraint.")
@@ -139,7 +138,112 @@ def identify_top_intervals(
             _compute_interval_stats(
                 prepared=prepared,
                 rank=rank,
-                analyzed_metric=window.score_metric,
+                analyzed_metric=output_metric or window.score_metric,
+                start_s=window.start_s,
+                end_s=window.end_s,
+                inner_interval_lengths_s=inner_lengths,
+                slope_window_m=slope_window_m,
+                hr_zone_tabs_cmd=hr_tabs,
+                power_zone_tabs_cmd=power_tabs,
+                hr_hist_bins=hr_hist_bins,
+                power_hist_bins=power_hist_bins,
+                non_moving_speed_threshold_kmh=non_moving_speed_threshold_kmh,
+                non_moving_perimeter_m=non_moving_perimeter_m,
+            )
+        )
+    return results
+
+
+def identify_top_intervals_at_least_duration(
+    activity: ActivityData,
+    minimum_duration_s: float,
+    max_overlap_ratio: float,
+    count: int,
+    analyzed_metric: str,
+    inner_interval_lengths_s: Iterable[float],
+    output_metric: str | None = None,
+    slope_window_m: float = 30.0,
+    hr_zone_tabs_bpm: Iterable[float] | None = None,
+    power_zone_tabs_w: Iterable[float] | None = None,
+    hr_hist_bins: int | None = None,
+    power_hist_bins: int | None = None,
+    non_moving_speed_threshold_kmh: float = 3.0,
+    non_moving_perimeter_m: float = 20.0,
+) -> list[IntervalStats]:
+    """Identify highest-average intervals with duration at least ``minimum_duration_s``."""
+    if minimum_duration_s <= 0:
+        raise ValueError(f"minimum_duration_s must be > 0, got {minimum_duration_s}.")
+    if not (0 <= max_overlap_ratio < 1):
+        raise ValueError(
+            f"max_overlap_ratio must be in [0, 1), got {max_overlap_ratio}."
+        )
+    if count <= 0:
+        raise ValueError(f"count must be > 0, got {count}.")
+    if analyzed_metric not in {"power", "heart_rate"}:
+        raise ValueError(
+            f"analyzed_metric must be 'power' or 'heart_rate', got '{analyzed_metric}'."
+        )
+    if slope_window_m <= 0:
+        raise ValueError(f"slope_window_m must be > 0, got {slope_window_m}.")
+    if non_moving_speed_threshold_kmh < 0:
+        raise ValueError(
+            "non_moving_speed_threshold_kmh must be >= 0, got "
+            f"{non_moving_speed_threshold_kmh}."
+        )
+    if non_moving_perimeter_m <= 0:
+        raise ValueError(
+            f"non_moving_perimeter_m must be > 0, got {non_moving_perimeter_m}."
+        )
+
+    inner_lengths = sorted(float(x) for x in inner_interval_lengths_s)
+    for item in inner_lengths:
+        if item <= 0:
+            raise ValueError(f"Inner interval lengths must be > 0, got {item}.")
+
+    hr_tabs = _normalize_tabs(hr_zone_tabs_bpm, "hr_zone_tabs_bpm")
+    power_tabs = _normalize_tabs(power_zone_tabs_w, "power_zone_tabs_w")
+
+    if hr_hist_bins is not None and hr_hist_bins <= 0:
+        raise ValueError(f"hr_hist_bins must be > 0 when provided, got {hr_hist_bins}.")
+    if power_hist_bins is not None and power_hist_bins <= 0:
+        raise ValueError(
+            f"power_hist_bins must be > 0 when provided, got {power_hist_bins}."
+        )
+
+    prepared = _prepare_activity(activity)
+    if minimum_duration_s > prepared.duration_s + EPSILON:
+        raise RuntimeError(
+            "Requested minimum duration "
+            f"{minimum_duration_s:.3f}s exceeds activity duration {prepared.duration_s:.3f}s."
+        )
+
+    candidates = _build_min_duration_candidates(
+        prepared=prepared,
+        minimum_duration_s=minimum_duration_s,
+        analyzed_metric=analyzed_metric,
+    )
+    if not candidates:
+        raise RuntimeError(
+            "No valid intervals with full "
+            f"{analyzed_metric} coverage for minimum duration {minimum_duration_s:.3f}s."
+        )
+
+    selected = _select_interval_windows(
+        candidates=candidates,
+        max_overlap_ratio=max_overlap_ratio,
+        count=count,
+        fixed_reference_duration_s=None,
+    )
+    if not selected:
+        raise RuntimeError("No intervals met the overlap constraint.")
+
+    results: list[IntervalStats] = []
+    for rank, window in enumerate(selected, start=1):
+        results.append(
+            _compute_interval_stats(
+                prepared=prepared,
+                rank=rank,
+                analyzed_metric=output_metric or window.score_metric,
                 start_s=window.start_s,
                 end_s=window.end_s,
                 inner_interval_lengths_s=inner_lengths,
@@ -344,29 +448,278 @@ def _build_candidates(
     duration_s: float,
     analyzed_metric: str,
 ) -> list[IntervalWindow]:
-    times = prepared.times
-    candidates: list[IntervalWindow] = []
+    if analyzed_metric == "power":
+        series = prepared.power
+    elif analyzed_metric == "heart_rate":
+        series = prepared.heart_rate
+    else:  # pragma: no cover - protected by caller
+        raise RuntimeError(f"Unsupported metric: {analyzed_metric}")
 
-    for start_s in times[:-1]:
-        end_s = start_s + duration_s
-        if end_s > prepared.duration_s + EPSILON:
-            break
-        average = _metric_average(
-            prepared, analyzed_metric, start_s, end_s, require_full=True
-        )
-        if average is None:
+    unique: dict[tuple[float, float], IntervalWindow] = {}
+    for value_start, value_end_exclusive in _valid_metric_segments(series.values):
+        boundary_start = value_start
+        boundary_end = value_end_exclusive
+        segment_boundary_times = list(prepared.times[boundary_start : boundary_end + 1])
+        segment_start_s = segment_boundary_times[0]
+        segment_end_s = segment_boundary_times[-1]
+        latest_start_s = segment_end_s - duration_s
+        if latest_start_s < segment_start_s - EPSILON:
             continue
-        candidates.append(
-            IntervalWindow(
+
+        for start_s in _fixed_duration_candidate_starts(
+            segment_boundary_times=segment_boundary_times,
+            duration_s=duration_s,
+        ):
+            end_s = start_s + duration_s
+            average = _metric_average(
+                prepared, analyzed_metric, start_s, end_s, require_full=True
+            )
+            if average is None:
+                continue
+            unique[(start_s, end_s)] = IntervalWindow(
                 start_s=start_s,
                 end_s=end_s,
                 score_metric=analyzed_metric,
                 score_average=average,
             )
-        )
 
+    candidates = list(unique.values())
     candidates.sort(key=lambda c: (-c.score_average, c.start_s))
     return candidates
+
+
+def _fixed_duration_candidate_starts(
+    segment_boundary_times: list[float],
+    duration_s: float,
+) -> list[float]:
+    """Return all boundary breakpoints where the exact fixed-window optimum can occur."""
+    if len(segment_boundary_times) < 2:
+        return []
+
+    segment_start_s = segment_boundary_times[0]
+    latest_start_s = segment_boundary_times[-1] - duration_s
+    if latest_start_s < segment_start_s - EPSILON:
+        return []
+
+    candidate_starts = [segment_start_s, latest_start_s]
+    for boundary_time in segment_boundary_times:
+        candidate_starts.append(boundary_time)
+        candidate_starts.append(boundary_time - duration_s)
+
+    candidate_starts.sort()
+
+    unique: list[float] = []
+    for start_s in candidate_starts:
+        if start_s < segment_start_s - EPSILON or start_s > latest_start_s + EPSILON:
+            continue
+        clamped = min(max(start_s, segment_start_s), latest_start_s)
+        if unique and abs(unique[-1] - clamped) <= EPSILON:
+            continue
+        unique.append(clamped)
+
+    return unique
+
+
+def _build_min_duration_candidates(
+    prepared: _PreparedActivity,
+    minimum_duration_s: float,
+    analyzed_metric: str,
+) -> list[IntervalWindow]:
+    if analyzed_metric == "power":
+        series = prepared.power
+    elif analyzed_metric == "heart_rate":
+        series = prepared.heart_rate
+    else:  # pragma: no cover - protected by caller
+        raise RuntimeError(f"Unsupported metric: {analyzed_metric}")
+
+    unique: dict[tuple[float, float], IntervalWindow] = {}
+    for value_start, value_end_exclusive in _valid_metric_segments(series.values):
+        boundary_start = value_start
+        boundary_end = value_end_exclusive
+        segment_start_s = prepared.times[boundary_start]
+        segment_end_s = prepared.times[boundary_end]
+        if segment_end_s - segment_start_s < minimum_duration_s - EPSILON:
+            continue
+
+        time_slice = [
+            prepared.times[i] for i in range(boundary_start, boundary_end + 1)
+        ]
+        prefix_slice = [
+            series.integral_prefix[i] - series.integral_prefix[boundary_start]
+            for i in range(boundary_start, boundary_end + 1)
+        ]
+
+        for candidate in _best_candidates_for_boundaries(
+            time_slice,
+            prefix_slice,
+            minimum_duration_s,
+            analyzed_metric,
+        ):
+            unique[(candidate.start_s, candidate.end_s)] = candidate
+
+        reversed_origin_s = time_slice[-1]
+        reversed_times = [reversed_origin_s - t for t in reversed(time_slice)]
+        reversed_prefix = [prefix_slice[-1] - p for p in reversed(prefix_slice)]
+        for candidate in _best_candidates_for_boundaries(
+            reversed_times,
+            reversed_prefix,
+            minimum_duration_s,
+            analyzed_metric,
+        ):
+            mapped = IntervalWindow(
+                start_s=reversed_origin_s - candidate.end_s,
+                end_s=reversed_origin_s - candidate.start_s,
+                score_metric=candidate.score_metric,
+                score_average=candidate.score_average,
+            )
+            unique[(mapped.start_s, mapped.end_s)] = mapped
+
+    candidates = list(unique.values())
+    candidates.sort(key=lambda c: (-c.score_average, c.end_s - c.start_s, c.start_s))
+    return candidates
+
+
+def _best_candidates_for_boundaries(
+    boundary_times: list[float],
+    boundary_prefix: list[float],
+    minimum_duration_s: float,
+    analyzed_metric: str,
+) -> list[IntervalWindow]:
+    """Return one best candidate per end boundary using a lower-hull scan."""
+    if len(boundary_times) != len(boundary_prefix):
+        raise RuntimeError("Boundary time/prefix arrays must have equal length.")
+    if len(boundary_times) < 2:
+        return []
+
+    hull: deque[int] = deque()
+    eligible_start = 0
+    candidates: list[IntervalWindow] = []
+
+    for end_idx in range(1, len(boundary_times)):
+        threshold = boundary_times[end_idx] - minimum_duration_s
+        while eligible_start < end_idx and boundary_times[eligible_start] <= threshold + EPSILON:
+            _append_hull_index(hull, boundary_times, boundary_prefix, eligible_start)
+            eligible_start += 1
+
+        if not hull:
+            continue
+
+        while len(hull) >= 2 and _window_average_from_prefix(
+            boundary_times, boundary_prefix, hull[0], end_idx
+        ) <= _window_average_from_prefix(
+            boundary_times, boundary_prefix, hull[1], end_idx
+        ) + EPSILON:
+            hull.popleft()
+
+        start_idx = hull[0]
+        if boundary_times[end_idx] - boundary_times[start_idx] < minimum_duration_s - EPSILON:
+            continue
+        average = _window_average_from_prefix(
+            boundary_times, boundary_prefix, start_idx, end_idx
+        )
+        candidates.append(
+            IntervalWindow(
+                start_s=boundary_times[start_idx],
+                end_s=boundary_times[end_idx],
+                score_metric=analyzed_metric,
+                score_average=average,
+            )
+        )
+
+    return candidates
+
+
+def _append_hull_index(
+    hull: deque[int],
+    boundary_times: list[float],
+    boundary_prefix: list[float],
+    new_idx: int,
+) -> None:
+    while len(hull) >= 2 and _slope_between_prefix_points(
+        boundary_times, boundary_prefix, hull[-2], hull[-1]
+    ) >= _slope_between_prefix_points(
+        boundary_times, boundary_prefix, hull[-1], new_idx
+    ) - EPSILON:
+        hull.pop()
+    hull.append(new_idx)
+
+
+def _slope_between_prefix_points(
+    boundary_times: list[float],
+    boundary_prefix: list[float],
+    left_idx: int,
+    right_idx: int,
+) -> float:
+    duration = boundary_times[right_idx] - boundary_times[left_idx]
+    if duration <= EPSILON:
+        raise RuntimeError("Boundary duration must be positive for slope calculation.")
+    return (boundary_prefix[right_idx] - boundary_prefix[left_idx]) / duration
+
+
+def _window_average_from_prefix(
+    boundary_times: list[float],
+    boundary_prefix: list[float],
+    start_idx: int,
+    end_idx: int,
+) -> float:
+    return _slope_between_prefix_points(
+        boundary_times, boundary_prefix, start_idx, end_idx
+    )
+
+
+def _valid_metric_segments(
+    values: tuple[float | None, ...],
+) -> list[tuple[int, int]]:
+    """Return contiguous valid-value segments as boundary-index pairs."""
+    segments: list[tuple[int, int]] = []
+    start_idx: int | None = None
+    for idx, value in enumerate(values):
+        if value is not None:
+            if start_idx is None:
+                start_idx = idx
+            continue
+        if start_idx is not None:
+            segments.append((start_idx, idx))
+            start_idx = None
+    if start_idx is not None:
+        segments.append((start_idx, len(values)))
+    return segments
+
+
+def _select_interval_windows(
+    candidates: list[IntervalWindow],
+    max_overlap_ratio: float,
+    count: int,
+    fixed_reference_duration_s: float | None,
+) -> list[IntervalWindow]:
+    selected: list[IntervalWindow] = []
+    for candidate in candidates:
+        if all(
+            _overlap_seconds(candidate, existing)
+            <= _allowed_overlap_seconds(
+                candidate, existing, max_overlap_ratio, fixed_reference_duration_s
+            )
+            + EPSILON
+            for existing in selected
+        ):
+            selected.append(candidate)
+        if len(selected) >= count:
+            break
+    return selected
+
+
+def _allowed_overlap_seconds(
+    candidate: IntervalWindow,
+    existing: IntervalWindow,
+    max_overlap_ratio: float,
+    fixed_reference_duration_s: float | None,
+) -> float:
+    if fixed_reference_duration_s is not None:
+        return max_overlap_ratio * fixed_reference_duration_s
+
+    candidate_duration = candidate.end_s - candidate.start_s
+    existing_duration = existing.end_s - existing.start_s
+    return max_overlap_ratio * min(candidate_duration, existing_duration)
 
 
 def _compute_interval_stats(

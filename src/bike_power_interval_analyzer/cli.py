@@ -9,7 +9,11 @@ from pathlib import Path
 from typing import Any
 
 from .duration import parse_duration_to_seconds, parse_inner_interval_lengths
-from .intervals import analyze_stored_intervals, identify_top_intervals
+from .intervals import (
+    analyze_stored_intervals,
+    identify_top_intervals,
+    identify_top_intervals_at_least_duration,
+)
 from .output import (
     flatten_results_for_csv,
     render_text_report,
@@ -21,10 +25,17 @@ from .output import (
 from .parsers import parse_activity_file
 
 
-TARGET_TO_RESULT_KEY = {
-    "power": "power",
-    "heart-rate": "heart_rate",
-    "interval": "interval",
+TARGET_CONFIG = {
+    "power": {"metric": "power", "search_mode": "fixed"},
+    "power-max": {"metric": "power", "search_mode": "minimum"},
+    "hr": {"metric": "heart_rate", "search_mode": "fixed"},
+    "hr-max": {"metric": "heart_rate", "search_mode": "minimum"},
+    "interval": {"metric": "interval", "search_mode": "stored"},
+}
+
+LEGACY_TARGET_ALIASES = {
+    "heart-rate": "hr",
+    "heart-rate-max": "hr-max",
 }
 
 PRESET_ALLOWED_KEYS = {
@@ -83,7 +94,10 @@ def build_argument_parser(defaults: dict[str, Any] | None = None) -> argparse.Ar
         "-d",
         "--duration",
         default=default_values.get("duration"),
-        help="Interval duration as seconds, MM:SS, or HH:MM:SS",
+        help=(
+            "Interval duration as seconds, MM:SS, or HH:MM:SS "
+            "(exact for power/hr, minimum for power-max/hr-max)"
+        ),
     )
     parser.add_argument(
         "--max-overlap",
@@ -101,11 +115,11 @@ def build_argument_parser(defaults: dict[str, Any] | None = None) -> argparse.Ar
     parser.add_argument(
         "--target",
         default=default_values.get(
-            "target", default_values.get("metrics", "power,heart-rate")
+            "target", default_values.get("metrics", "power,hr")
         ),
         help=(
             "Analysis target(s) as comma-separated values from "
-            "power,heart-rate,interval"
+            "power,power-max,hr,hr-max,interval"
         ),
     )
     parser.add_argument(
@@ -247,8 +261,10 @@ def main(argv: list[str] | None = None) -> int:
         target_list = _parse_target_spec(args.target, "--target")
     except ValueError as exc:
         parser.error(str(exc))
-    if any(target in {"power", "heart-rate"} for target in target_list) and args.duration is None:
-        parser.error("--duration is required when target includes power or heart-rate.")
+    if any(target != "interval" for target in target_list) and args.duration is None:
+        parser.error(
+            "--duration is required when target includes power, power-max, hr, or hr-max."
+        )
 
     try:
         duration_s = (
@@ -312,19 +328,40 @@ def main(argv: list[str] | None = None) -> int:
                 non_moving_speed_threshold_kmh=args.non_moving_speed_threshold_kmh,
                 non_moving_perimeter_m=args.non_moving_perimeter_m,
             )
-        if any(target in {"power", "heart-rate"} for target in target_list):
+        if any(target != "interval" for target in target_list):
             if duration_s is None:
                 raise RuntimeError("Internal error: duration_s missing for windowed target.")
             for target in target_list:
                 if target == "interval":
                     continue
-                metric = TARGET_TO_RESULT_KEY[target]
-                results_by_metric[metric] = identify_top_intervals(
+                target_config = TARGET_CONFIG[target]
+                metric = str(target_config["metric"])
+                if target_config["search_mode"] == "fixed":
+                    results_by_metric[target] = identify_top_intervals(
+                        activity=activity,
+                        duration_s=duration_s,
+                        max_overlap_ratio=args.max_overlap,
+                        count=args.count,
+                        analyzed_metric=metric,
+                        output_metric=target,
+                        inner_interval_lengths_s=inner_lengths_s,
+                        slope_window_m=args.slope_window_m,
+                        hr_zone_tabs_bpm=hr_zone_tabs,
+                        power_zone_tabs_w=power_zone_tabs,
+                        hr_hist_bins=args.hr_hist_bins,
+                        power_hist_bins=args.power_hist_bins,
+                        non_moving_speed_threshold_kmh=args.non_moving_speed_threshold_kmh,
+                        non_moving_perimeter_m=args.non_moving_perimeter_m,
+                    )
+                    continue
+
+                results_by_metric[target] = identify_top_intervals_at_least_duration(
                     activity=activity,
-                    duration_s=duration_s,
+                    minimum_duration_s=duration_s,
                     max_overlap_ratio=args.max_overlap,
                     count=args.count,
                     analyzed_metric=metric,
+                    output_metric=target,
                     inner_interval_lengths_s=inner_lengths_s,
                     slope_window_m=args.slope_window_m,
                     hr_zone_tabs_bpm=hr_zone_tabs,
@@ -584,19 +621,20 @@ def _parse_target_spec(raw: Any, arg_name: str) -> list[str]:
         if not token:
             raise ValueError(
                 f"{arg_name} contains an empty target. Use comma-separated values like "
-                "power,heart-rate,interval."
+                "power,power-max,hr,hr-max,interval."
             )
         if token == "both":
             raise ValueError(
-                f"{arg_name} no longer supports 'both'. Use 'power,heart-rate'."
+                f"{arg_name} no longer supports 'both'. Use 'power,hr'."
             )
-        if token not in TARGET_TO_RESULT_KEY:
+        normalized = LEGACY_TARGET_ALIASES.get(token, token)
+        if normalized not in TARGET_CONFIG:
             raise ValueError(
                 f"{arg_name} contains unsupported target '{token}'. "
-                "Allowed: power,heart-rate,interval."
+                "Allowed: power,power-max,hr,hr-max,interval."
             )
-        if token not in selected:
-            selected.append(token)
+        if normalized not in selected:
+            selected.append(normalized)
 
     if not selected:
         raise ValueError(f"{arg_name} resolved to an empty target set.")

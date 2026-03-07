@@ -13,7 +13,8 @@ Run directly from the repository root without installing:
 
 ```bash
 python3 run.py --help
-python3 run.py INPUT_FILE --duration 05:00 --target power,heart-rate
+python3 run.py INPUT_FILE --duration 05:00 --target power,hr
+python3 run.py INPUT_FILE --duration 05:00 --target power-max,hr-max
 python3 run.py INPUT_FILE --duration 10:00 --target power --inner-intlen 3,10,60
 python3 run.py --preset presets/base.json --preset presets/user.json --target power
 python3 run.py 22069312334.zip --duration 10:00 --target power
@@ -43,3 +44,5 @@ pytest -q
 - Use temporary files for synthetic TCX fixtures in tests; avoid relying on local activity exports.
 - `--absolute-timezone` defaults to `local` for text rendering; JSON keeps source timestamps.
 - FIT profile zones can be extracted from `time_in_zone` boundaries.
+- Fixed-duration `power`/`hr` search evaluates continuous starts at metric-boundary breakpoints, so it is not limited to sampled start timestamps.
+- `power-max` and `hr-max` use a minimum-duration search and compare overlap against the shorter selected interval.

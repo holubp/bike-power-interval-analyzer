@@ -20,15 +20,33 @@ def render_text_report(
     """Render a human-readable report for stdout."""
     lines: list[str] = []
 
-    for metric in ("power", "heart_rate", "interval"):
+    preferred_order = (
+        "power",
+        "power-max",
+        "hr",
+        "hr-max",
+        "interval",
+        "heart_rate",
+        "heart_rate_max",
+    )
+    metric_order = [metric for metric in preferred_order if metric in results_by_metric]
+    metric_order.extend(
+        metric for metric in results_by_metric.keys() if metric not in metric_order
+    )
+
+    for metric in metric_order:
         intervals = results_by_metric.get(metric)
         if not intervals:
             continue
 
         if metric == "power":
             title = "Power-based intervals"
-        elif metric == "heart_rate":
+        elif metric == "power-max":
+            title = "Power max-average intervals"
+        elif metric in {"hr", "heart_rate"}:
             title = "Heart-rate-based intervals"
+        elif metric in {"hr-max", "heart_rate_max"}:
+            title = "Heart-rate max-average intervals"
         else:
             title = "File-stored intervals"
         lines.append(_section_title(title, color))

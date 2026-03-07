@@ -4,7 +4,10 @@ from datetime import datetime, timedelta, timezone
 
 import pytest
 
-from bike_power_interval_analyzer.intervals import identify_top_intervals
+from bike_power_interval_analyzer.intervals import (
+    identify_top_intervals,
+    identify_top_intervals_at_least_duration,
+)
 from bike_power_interval_analyzer.models import ActivityData, DataPoint
 
 
@@ -42,6 +45,45 @@ def _build_activity() -> ActivityData:
         source_path="synthetic",
         start_time=start,
         points=tuple(points),
+    )
+
+
+def _build_coarse_activity() -> ActivityData:
+    start = datetime(2025, 1, 1, 12, 0, 0, tzinfo=timezone.utc)
+    points = (
+        DataPoint(
+            timestamp=start + timedelta(seconds=0),
+            elapsed_s=0.0,
+            distance_m=0.0,
+            power_w=100.0,
+            heart_rate_bpm=130.0,
+        ),
+        DataPoint(
+            timestamp=start + timedelta(seconds=10),
+            elapsed_s=10.0,
+            distance_m=100.0,
+            power_w=300.0,
+            heart_rate_bpm=160.0,
+        ),
+        DataPoint(
+            timestamp=start + timedelta(seconds=20),
+            elapsed_s=20.0,
+            distance_m=200.0,
+            power_w=50.0,
+            heart_rate_bpm=120.0,
+        ),
+        DataPoint(
+            timestamp=start + timedelta(seconds=30),
+            elapsed_s=30.0,
+            distance_m=300.0,
+            power_w=50.0,
+            heart_rate_bpm=120.0,
+        ),
+    )
+    return ActivityData(
+        source_path="synthetic-coarse",
+        start_time=start,
+        points=points,
     )
 
 
@@ -86,6 +128,45 @@ def test_identify_hr_interval() -> None:
     assert first.average_heart_rate_bpm == pytest.approx(182.0)
     assert first.inner_heart_rate_max_avg_bpm[10.0] == pytest.approx(182.0)
     assert first.inner_heart_rate_max_avg_bpm[20.0] == pytest.approx(182.0)
+
+
+def test_identify_power_interval_with_minimum_duration() -> None:
+    activity = _build_activity()
+    intervals = identify_top_intervals_at_least_duration(
+        activity=activity,
+        minimum_duration_s=10.0,
+        max_overlap_ratio=0.0,
+        count=1,
+        analyzed_metric="power",
+        inner_interval_lengths_s=[5.0],
+    )
+
+    assert len(intervals) == 1
+    first = intervals[0]
+    assert first.start_s == pytest.approx(20.0)
+    assert first.end_s == pytest.approx(30.0)
+    assert first.duration_s == pytest.approx(10.0)
+    assert first.average_power_w == pytest.approx(320.0)
+    assert first.inner_power_max_avg_w[5.0] == pytest.approx(320.0)
+
+
+def test_identify_fixed_duration_interval_uses_continuous_start_times() -> None:
+    activity = _build_coarse_activity()
+    intervals = identify_top_intervals(
+        activity=activity,
+        duration_s=15.0,
+        max_overlap_ratio=0.0,
+        count=1,
+        analyzed_metric="power",
+        inner_interval_lengths_s=[5.0],
+    )
+
+    assert len(intervals) == 1
+    first = intervals[0]
+    assert first.start_s == pytest.approx(5.0)
+    assert first.end_s == pytest.approx(20.0)
+    assert first.duration_s == pytest.approx(15.0)
+    assert first.average_power_w == pytest.approx((5.0 * 100.0 + 10.0 * 300.0) / 15.0)
 
 
 def test_invalid_overlap_rejected() -> None:

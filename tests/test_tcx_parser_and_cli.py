@@ -130,7 +130,7 @@ def test_cli_writes_json_csv_and_gpx(tmp_path: Path) -> None:
             "--count",
             "2",
             "--target",
-            "power,heart-rate",
+            "power,hr",
             "--inner-intlen",
             "5,10",
             "--slope-window-m",
@@ -161,7 +161,7 @@ def test_cli_writes_json_csv_and_gpx(tmp_path: Path) -> None:
     payload = json.loads(json_out.read_text(encoding="utf-8"))
     assert payload["duration_s"] == 15
     assert payload["slope_window_m"] == 25
-    assert set(payload["results"].keys()) == {"power", "heart_rate"}
+    assert set(payload["results"].keys()) == {"power", "hr"}
     assert len(payload["results"]["power"]) == 2
     first = payload["results"]["power"][0]
     assert "start_relative_hms" in first
@@ -206,7 +206,7 @@ def test_cli_preset_defaults_and_override(tmp_path: Path) -> None:
             "--count",
             "2",
             "--target",
-            "power,heart-rate",
+            "power,hr",
         ]
     )
     assert exit_code == 0
@@ -215,8 +215,8 @@ def test_cli_preset_defaults_and_override(tmp_path: Path) -> None:
     payload = json.loads(output_json.read_text(encoding="utf-8"))
     assert payload["duration_s"] == 12
     assert payload["count"] == 2
-    assert payload["target"] == "power,heart-rate"
-    assert set(payload["results"].keys()) == {"power", "heart_rate"}
+    assert payload["target"] == "power,hr"
+    assert set(payload["results"].keys()) == {"power", "hr"}
 
 
 def test_cli_rejects_unknown_preset_keys(tmp_path: Path) -> None:
@@ -241,7 +241,7 @@ def test_cli_write_preset_exports_effective_config(tmp_path: Path) -> None:
             "--count",
             "2",
             "--target",
-            "power,heart-rate",
+            "power,hr",
             "--inner-intlen",
             "5,10",
             "--slope-window-m",
@@ -274,7 +274,7 @@ def test_cli_write_preset_exports_effective_config(tmp_path: Path) -> None:
     assert preset_payload["input_file"] == str(input_file)
     assert preset_payload["duration"] == "15"
     assert preset_payload["count"] == 2
-    assert preset_payload["target"] == "power,heart-rate"
+    assert preset_payload["target"] == "power,hr"
     assert preset_payload["inner_intlen"] == [5.0, 10.0]
     assert preset_payload["slope_window_m"] == 25.0
     assert preset_payload["hr_zone_tabs"] == [145.0, 160.0]
@@ -326,7 +326,7 @@ def test_multiple_presets_are_applied_in_order(tmp_path: Path) -> None:
         json.dumps(
             {
                 "count": 2,
-                "target": "power,heart-rate",
+                "target": "power,hr",
                 "non_moving_speed_threshold_kmh": 2.0,
                 "non_moving_perimeter_m": 18.0,
             }
@@ -345,7 +345,7 @@ def test_multiple_presets_are_applied_in_order(tmp_path: Path) -> None:
     assert exit_code == 0
     payload = json.loads(output_json.read_text(encoding="utf-8"))
     assert payload["count"] == 2
-    assert payload["target"] == "power,heart-rate"
+    assert payload["target"] == "power,hr"
     assert payload["non_moving_speed_threshold_kmh"] == 2.0
     assert payload["non_moving_perimeter_m"] == 18.0
 
@@ -436,7 +436,7 @@ def test_cli_accepts_comma_list_values_from_preset_strings(tmp_path: Path) -> No
             {
                 "input_file": str(input_file),
                 "duration": "00:12",
-                "target": "power,heart-rate",
+                "target": "power,hr",
                 "inner_intlen": "6,12",
                 "hr_zone_tabs": "140,160",
                 "power_zone_tabs": "190,250",
@@ -453,6 +453,37 @@ def test_cli_accepts_comma_list_values_from_preset_strings(tmp_path: Path) -> No
     assert payload["inner_interval_lengths_s"] == [6.0, 12.0]
     assert payload["hr_zone_tabs"] == [140.0, 160.0]
     assert payload["power_zone_tabs"] == [190.0, 250.0]
+
+
+def test_cli_max_targets_use_minimum_duration_search(tmp_path: Path) -> None:
+    input_file = tmp_path / "sample.tcx"
+    _write_tcx(input_file)
+    output_json = tmp_path / "max_targets.json"
+
+    exit_code = main(
+        [
+            str(input_file),
+            "--duration",
+            "00:10",
+            "--count",
+            "1",
+            "--target",
+            "power-max,hr-max",
+            "--no-stdout",
+            "--json-out",
+            str(output_json),
+        ]
+    )
+    assert exit_code == 0
+    payload = json.loads(output_json.read_text(encoding="utf-8"))
+    assert payload["target"] == "power-max,hr-max"
+    assert set(payload["results"].keys()) == {"power-max", "hr-max"}
+    assert payload["results"]["power-max"][0]["start_elapsed_s"] == pytest.approx(10.0)
+    assert payload["results"]["power-max"][0]["duration_s"] == pytest.approx(10.0)
+    assert payload["results"]["power-max"][0]["average_power_w"] == pytest.approx(320.0)
+    assert payload["results"]["hr-max"][0]["start_elapsed_s"] == pytest.approx(15.0)
+    assert payload["results"]["hr-max"][0]["duration_s"] == pytest.approx(10.0)
+    assert payload["results"]["hr-max"][0]["average_heart_rate_bpm"] == pytest.approx(170.0)
 
 
 def test_cli_stdout_stat_middle_values_are_sorted_numerically(
