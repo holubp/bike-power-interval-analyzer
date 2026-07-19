@@ -12,6 +12,7 @@ from typing import Iterable
 from .models import ActivityData, DataPoint, IntervalStats, IntervalWindow, StoredInterval
 
 EPSILON = 1e-9
+QUANTILE_LEVELS = (("q10", 0.10), ("q25", 0.25), ("q75", 0.75), ("q90", 0.90))
 
 
 @dataclass(frozen=True)
@@ -45,6 +46,7 @@ def identify_top_intervals(
     power_hist_bins: int | None = None,
     non_moving_speed_threshold_kmh: float = 3.0,
     non_moving_perimeter_m: float = 20.0,
+    include_quantiles: bool = False,
 ) -> list[IntervalStats]:
     """Identify highest-average intervals for one metric.
 
@@ -63,6 +65,7 @@ def identify_top_intervals(
         power_hist_bins: Optional command-line power histogram bin count.
         non_moving_speed_threshold_kmh: Maximum speed considered stationary.
         non_moving_perimeter_m: Maximum location drift for stationary detection.
+        include_quantiles: Include Q10/Q25/Q75/Q90 metric statistics.
 
     Returns:
         Ranked interval statistics.
@@ -149,6 +152,7 @@ def identify_top_intervals(
                 power_hist_bins=power_hist_bins,
                 non_moving_speed_threshold_kmh=non_moving_speed_threshold_kmh,
                 non_moving_perimeter_m=non_moving_perimeter_m,
+                include_quantiles=include_quantiles,
             )
         )
     return results
@@ -169,8 +173,34 @@ def identify_top_intervals_at_least_duration(
     power_hist_bins: int | None = None,
     non_moving_speed_threshold_kmh: float = 3.0,
     non_moving_perimeter_m: float = 20.0,
+    include_quantiles: bool = False,
 ) -> list[IntervalStats]:
-    """Identify highest-average intervals with duration at least ``minimum_duration_s``."""
+    """Identify highest-average intervals at least as long as the minimum.
+
+    Args:
+        activity: Parsed activity stream.
+        minimum_duration_s: Minimum eligible interval duration in seconds.
+        max_overlap_ratio: Maximum overlap allowed between selected intervals.
+        count: Maximum number of intervals to return.
+        analyzed_metric: Either ``"power"`` or ``"heart_rate"``.
+        inner_interval_lengths_s: Inner floating windows to compute.
+        output_metric: Label stored in the returned stats payload.
+        slope_window_m: Floating distance window in meters for slope stats.
+        hr_zone_tabs_bpm: Optional command-line HR zone tabs.
+        power_zone_tabs_w: Optional command-line power zone tabs.
+        hr_hist_bins: Optional command-line HR histogram bin count.
+        power_hist_bins: Optional command-line power histogram bin count.
+        non_moving_speed_threshold_kmh: Maximum speed considered stationary.
+        non_moving_perimeter_m: Maximum location drift for stationary detection.
+        include_quantiles: Include Q10/Q25/Q75/Q90 metric statistics.
+
+    Returns:
+        Ranked interval statistics.
+
+    Raises:
+        ValueError: If arguments are invalid.
+        RuntimeError: If no eligible intervals are found.
+    """
     if minimum_duration_s <= 0:
         raise ValueError(f"minimum_duration_s must be > 0, got {minimum_duration_s}.")
     if not (0 <= max_overlap_ratio < 1):
@@ -254,6 +284,7 @@ def identify_top_intervals_at_least_duration(
                 power_hist_bins=power_hist_bins,
                 non_moving_speed_threshold_kmh=non_moving_speed_threshold_kmh,
                 non_moving_perimeter_m=non_moving_perimeter_m,
+                include_quantiles=include_quantiles,
             )
         )
     return results
@@ -270,6 +301,7 @@ def analyze_stored_intervals(
     power_hist_bins: int | None = None,
     non_moving_speed_threshold_kmh: float = 3.0,
     non_moving_perimeter_m: float = 20.0,
+    include_quantiles: bool = False,
 ) -> list[IntervalStats]:
     """Analyze intervals already stored in source file metadata.
 
@@ -285,6 +317,7 @@ def analyze_stored_intervals(
         power_hist_bins: Optional command-line power histogram bin count.
         non_moving_speed_threshold_kmh: Maximum speed considered stationary.
         non_moving_perimeter_m: Maximum location drift for stationary detection.
+        include_quantiles: Include Q10/Q25/Q75/Q90 metric statistics.
     """
     if slope_window_m <= 0:
         raise ValueError(f"slope_window_m must be > 0, got {slope_window_m}.")
@@ -338,6 +371,7 @@ def analyze_stored_intervals(
                 power_hist_bins=power_hist_bins,
                 non_moving_speed_threshold_kmh=non_moving_speed_threshold_kmh,
                 non_moving_perimeter_m=non_moving_perimeter_m,
+                include_quantiles=include_quantiles,
             )
         )
     return results
@@ -736,6 +770,7 @@ def _compute_interval_stats(
     power_hist_bins: int | None,
     non_moving_speed_threshold_kmh: float,
     non_moving_perimeter_m: float,
+    include_quantiles: bool,
 ) -> IntervalStats:
     activity = prepared.activity
     duration = end_s - start_s
@@ -744,21 +779,21 @@ def _compute_interval_stats(
             f"Computed non-positive interval duration ({duration}) for rank {rank}."
         )
 
-    average_power = _metric_average(prepared, "power", start_s, end_s, require_full=True)
-    average_hr = _metric_average(prepared, "heart_rate", start_s, end_s, require_full=True)
-
-    max_power = _metric_max(prepared, "power", start_s, end_s)
-    max_hr = _metric_max(prepared, "heart_rate", start_s, end_s)
-
     length_m = _distance_length(prepared, start_s, end_s)
 
     power_samples = _metric_samples(prepared, "power", start_s, end_s)
     hr_samples = _metric_samples(prepared, "heart_rate", start_s, end_s)
     speed_samples = _speed_samples(prepared, start_s, end_s)
 
-    min_power, med_power, _, _ = _weighted_summary(power_samples)
-    min_hr, med_hr, _, _ = _weighted_summary(hr_samples)
-    min_speed, med_speed, avg_speed, max_speed = _weighted_summary(speed_samples)
+    min_power, med_power, avg_power, max_power, power_quantiles = _weighted_summary(
+        power_samples, include_quantiles
+    )
+    min_hr, med_hr, avg_hr, max_hr, hr_quantiles = _weighted_summary(
+        hr_samples, include_quantiles
+    )
+    min_speed, med_speed, avg_speed, max_speed, speed_quantiles = _weighted_summary(
+        speed_samples, include_quantiles
+    )
 
     interval_profile = _interval_distance_elevation_profile(prepared, start_s, end_s)
     ascent_m, descent_m = _ascent_descent(interval_profile)
@@ -826,12 +861,15 @@ def _compute_interval_stats(
         non_moving_perimeter_m=non_moving_perimeter_m,
         minimum_power_w=min_power,
         median_power_w=med_power,
-        average_power_w=average_power,
+        average_power_w=avg_power,
         maximum_power_w=max_power,
         minimum_heart_rate_bpm=min_hr,
         median_heart_rate_bpm=med_hr,
-        average_heart_rate_bpm=average_hr,
+        average_heart_rate_bpm=avg_hr,
         maximum_heart_rate_bpm=max_hr,
+        speed_quantiles_kmh=speed_quantiles,
+        power_quantiles_w=power_quantiles,
+        heart_rate_quantiles_bpm=hr_quantiles,
         heart_rate_hist_profile_zones=hr_hist_profile,
         heart_rate_hist_cmd_zones=hr_hist_cmd,
         heart_rate_hist_bins=hr_hist_by_bins,
@@ -958,36 +996,6 @@ def _partial_contribution(
     if value is None:
         return 0.0, 0.0
     return value * duration, duration
-
-
-def _metric_max(
-    prepared: _PreparedActivity,
-    metric: str,
-    start_s: float,
-    end_s: float,
-) -> float | None:
-    if metric == "power":
-        values = prepared.power.values
-    elif metric == "heart_rate":
-        values = prepared.heart_rate.values
-    else:  # pragma: no cover
-        raise RuntimeError(f"Unsupported metric: {metric}")
-
-    times = prepared.times
-    n_seg = len(times) - 1
-    i = _segment_index_for_time(times, start_s)
-    max_value: float | None = None
-
-    while i < n_seg and times[i] < end_s - EPSILON:
-        overlap_start = max(start_s, times[i])
-        overlap_end = min(end_s, times[i + 1])
-        if overlap_end > overlap_start + EPSILON:
-            value = values[i]
-            if value is not None:
-                if max_value is None or value > max_value:
-                    max_value = value
-        i += 1
-    return max_value
 
 
 def _metric_samples(
@@ -1130,9 +1138,19 @@ def _non_moving_elapsed_time(
 
 def _weighted_summary(
     samples: list[tuple[float, float]],
-) -> tuple[float | None, float | None, float | None, float | None]:
+    include_quantiles: bool = False,
+) -> tuple[
+    float | None,
+    float | None,
+    float | None,
+    float | None,
+    dict[str, float | None],
+]:
+    quantiles: dict[str, float | None] = (
+        {label: None for label, _ in QUANTILE_LEVELS} if include_quantiles else {}
+    )
     if not samples:
-        return None, None, None, None
+        return None, None, None, None, quantiles
 
     values = [value for value, _ in samples]
     minimum = min(values)
@@ -1140,21 +1158,40 @@ def _weighted_summary(
 
     total_weight = sum(weight for _, weight in samples)
     if total_weight <= EPSILON:
-        return None, None, None, None
+        return None, None, None, None, quantiles
 
     average = sum(value * weight for value, weight in samples) / total_weight
 
     sorted_samples = sorted(samples, key=lambda item: item[0])
-    half = total_weight / 2.0
+    median = _weighted_quantile(sorted_samples, total_weight, 0.5)
+    if include_quantiles:
+        quantiles = {
+            label: _weighted_quantile(sorted_samples, total_weight, level)
+            for label, level in QUANTILE_LEVELS
+        }
+
+    return minimum, median, average, maximum, quantiles
+
+
+def _weighted_quantile(
+    sorted_samples: list[tuple[float, float]],
+    total_weight: float,
+    quantile: float,
+) -> float:
+    if not sorted_samples:
+        raise ValueError("sorted_samples must not be empty.")
+    if total_weight <= EPSILON:
+        raise ValueError(f"total_weight must be > 0, got {total_weight}.")
+    if not (0 <= quantile <= 1):
+        raise ValueError(f"quantile must be in [0, 1], got {quantile}.")
+
+    threshold = total_weight * quantile
     cumulative = 0.0
-    median = sorted_samples[-1][0]
     for value, weight in sorted_samples:
         cumulative += weight
-        if cumulative + EPSILON >= half:
-            median = value
-            break
-
-    return minimum, median, average, maximum
+        if cumulative + EPSILON >= threshold:
+            return value
+    return sorted_samples[-1][0]
 
 
 def _distance_length(prepared: _PreparedActivity, start_s: float, end_s: float) -> float | None:

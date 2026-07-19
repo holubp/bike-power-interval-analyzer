@@ -61,6 +61,15 @@ Use short inner windows (comma-separated list):
 python3 run.py workout.fit --duration 10:00 --target power --inner-intlen 3,10,60
 ```
 
+Without `--inner-intlen`, the tool automatically uses `00:10`, `01:00`, `08:00`,
+`10:00`, `12:00`, and `15:00`, keeping only lengths that fit inside `--duration`.
+
+Include Q10, Q25, Q75, and Q90 for speed, power, and heart rate:
+
+```bash
+python3 run.py workout.fit --duration 10:00 --target power --quantiles
+```
+
 Important: list options are comma-separated only.
 Examples: `power,hr`, `power-max,hr-max`, `3,10,60`, `130,150,170`.
 

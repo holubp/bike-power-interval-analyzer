@@ -57,7 +57,7 @@ def render_text_report(
                 f"{fmt_hms_ms(stat.end_time, absolute_timezone)} "
                 f"rel={stat.relative_start_hms}-{stat.relative_end_hms} "
                 f"| dur={stat.duration_s:.3f}s ({_format_duration_hms(stat.duration_s)}) "
-                f"| len={fmt_optional(stat.length_m, 'm', color)}"
+                f"| len={fmt_optional(stat.length_m, 'm', False)}"
             )
             slope_summary = _format_summary_fields(
                 stat.minimum_slope_pct,
@@ -74,6 +74,7 @@ def render_text_report(
                 stat.maximum_speed_kmh,
                 "km/h",
                 color,
+                stat.speed_quantiles_kmh,
             )
             power_summary = _format_summary_fields(
                 stat.minimum_power_w,
@@ -82,6 +83,7 @@ def render_text_report(
                 stat.maximum_power_w,
                 "W",
                 color,
+                stat.power_quantiles_w,
             )
             hr_summary = _format_summary_fields(
                 stat.minimum_heart_rate_bpm,
@@ -90,6 +92,7 @@ def render_text_report(
                 stat.maximum_heart_rate_bpm,
                 "bpm",
                 color,
+                stat.heart_rate_quantiles_bpm,
             )
             lines.append(_interval_header(header, color))
             lines.append(
@@ -250,6 +253,13 @@ def interval_to_dict(stat: IntervalStats) -> dict[str, object]:
         "power_hist_bins": dict(stat.power_hist_bins),
     }
 
+    for label, value in stat.speed_quantiles_kmh.items():
+        payload[f"{label}_speed_kmh"] = value
+    for label, value in stat.power_quantiles_w.items():
+        payload[f"{label}_power_w"] = value
+    for label, value in stat.heart_rate_quantiles_bpm.items():
+        payload[f"{label}_heart_rate_bpm"] = value
+
     for inner, value in sorted(stat.inner_power_max_avg_w.items()):
         payload[f"inner_power_max_avg_{inner:g}s"] = value
     for inner, value in sorted(stat.inner_heart_rate_max_avg_bpm.items()):
@@ -357,14 +367,33 @@ def _format_summary_fields(
     maximum: float | None,
     unit: str,
     color: bool,
+    quantiles: Mapping[str, float | None] | None = None,
 ) -> str:
-    """Format min/avg/med/max fields with middle values ordered by value."""
-    middle_items = [("med", median), ("avg", average)]
-    middle_items.sort(
-        key=lambda item: (float("inf") if item[1] is None else item[1], item[0])
+    """Format summary fields ordered by numeric value while retaining labels."""
+    display_priority = {
+        "min": 0,
+        "Q10": 1,
+        "Q25": 2,
+        "med": 3,
+        "avg": 4,
+        "Q75": 5,
+        "Q90": 6,
+        "max": 7,
+    }
+    ordered_items = [
+        ("min", minimum),
+        ("med", median),
+        ("avg", average),
+        ("max", maximum),
+    ]
+    if quantiles:
+        ordered_items.extend((label.upper(), value) for label, value in quantiles.items())
+    ordered_items.sort(
+        key=lambda item: (
+            float("inf") if item[1] is None else item[1],
+            display_priority[item[0]],
+        )
     )
-
-    ordered_items = [("min", minimum), *middle_items, ("max", maximum)]
     return " ".join(
         f"{_stat_key(f'{label}:', color)}{fmt_optional(value, unit, color)}"
         for label, value in ordered_items

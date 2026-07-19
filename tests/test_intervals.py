@@ -256,6 +256,7 @@ def test_extended_stats_and_histograms() -> None:
         power_zone_tabs_w=[145.0, 175.0],
         hr_hist_bins=4,
         power_hist_bins=3,
+        include_quantiles=True,
     )
 
     assert len(intervals) == 1
@@ -277,6 +278,14 @@ def test_extended_stats_and_histograms() -> None:
     assert first.median_power_w is not None
     assert first.minimum_heart_rate_bpm is not None
     assert first.median_heart_rate_bpm is not None
+    assert first.speed_quantiles_kmh
+    assert first.power_quantiles_w == {
+        "q10": pytest.approx(181.0),
+        "q25": pytest.approx(184.0),
+        "q75": pytest.approx(194.0),
+        "q90": pytest.approx(197.0),
+    }
+    assert first.heart_rate_quantiles_bpm
     assert first.heart_rate_hist_profile_zones
     assert first.heart_rate_hist_cmd_zones
     assert first.heart_rate_hist_bins
@@ -285,6 +294,39 @@ def test_extended_stats_and_histograms() -> None:
     assert first.power_hist_bins
     assert sum(first.heart_rate_hist_cmd_zones.values()) == pytest.approx(first.duration_s)
     assert sum(first.power_hist_cmd_zones.values()) == pytest.approx(first.duration_s)
+
+
+def test_summary_average_uses_available_cross_metric_samples() -> None:
+    activity = _build_activity()
+    modified = list(activity.points)
+    for index in range(25, 30):
+        point = modified[index]
+        modified[index] = DataPoint(
+            timestamp=point.timestamp,
+            elapsed_s=point.elapsed_s,
+            distance_m=point.distance_m,
+            power_w=point.power_w,
+            heart_rate_bpm=None,
+            latitude_deg=point.latitude_deg,
+            longitude_deg=point.longitude_deg,
+            elevation_m=point.elevation_m,
+        )
+    partial_hr = ActivityData(
+        source_path=activity.source_path,
+        start_time=activity.start_time,
+        points=tuple(modified),
+    )
+
+    intervals = identify_top_intervals(
+        activity=partial_hr,
+        duration_s=20.0,
+        max_overlap_ratio=0.0,
+        count=1,
+        analyzed_metric="power",
+        inner_interval_lengths_s=[],
+    )
+
+    assert intervals[0].average_heart_rate_bpm == pytest.approx(145.0)
 
 
 def test_duplicate_tabs_rejected() -> None:

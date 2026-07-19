@@ -52,6 +52,7 @@ PRESET_ALLOWED_KEYS = {
     "power_zone_tabs",
     "hr_hist_bins",
     "power_hist_bins",
+    "quantiles",
     "absolute_timezone",
     "non_moving_speed_threshold_kmh",
     "non_moving_perimeter_m",
@@ -135,7 +136,8 @@ def build_argument_parser(defaults: dict[str, Any] | None = None) -> argparse.Ar
         metavar="SECONDS_CSV",
         help=(
             "Inner floating windows in seconds/MM:SS/HH:MM:SS as comma-separated values "
-            "(e.g. 3,10,60). Default: 10. Pass '--inner-intlen' with no value for an empty list."
+            "(e.g. 3,10,60). Defaults up to --duration: 10,60,480,600,720,900. "
+            "Pass '--inner-intlen' with no value for an empty list."
         ),
     )
     parser.add_argument(
@@ -175,6 +177,19 @@ def build_argument_parser(defaults: dict[str, Any] | None = None) -> argparse.Ar
         type=int,
         default=default_values.get("power_hist_bins"),
         help="Power histogram bin count",
+    )
+    parser.add_argument(
+        "--quantiles",
+        dest="quantiles",
+        action="store_true",
+        default=bool(default_values.get("quantiles", False)),
+        help="Include Q10, Q25, Q75, and Q90 for speed, power, and heart rate",
+    )
+    parser.add_argument(
+        "--no-quantiles",
+        dest="quantiles",
+        action="store_false",
+        help="Do not include Q10, Q25, Q75, and Q90",
     )
     parser.add_argument(
         "--absolute-timezone",
@@ -273,7 +288,8 @@ def main(argv: list[str] | None = None) -> int:
             else None
         )
         inner_lengths_s = parse_inner_interval_lengths(
-            _expand_csv_list(args.inner_intlen, "--inner-intlen")
+            _expand_csv_list(args.inner_intlen, "--inner-intlen"),
+            maximum_duration_s=duration_s,
         )
     except ValueError as exc:
         parser.error(str(exc))
@@ -327,6 +343,7 @@ def main(argv: list[str] | None = None) -> int:
                 power_hist_bins=args.power_hist_bins,
                 non_moving_speed_threshold_kmh=args.non_moving_speed_threshold_kmh,
                 non_moving_perimeter_m=args.non_moving_perimeter_m,
+                include_quantiles=args.quantiles,
             )
         if any(target != "interval" for target in target_list):
             if duration_s is None:
@@ -352,6 +369,7 @@ def main(argv: list[str] | None = None) -> int:
                         power_hist_bins=args.power_hist_bins,
                         non_moving_speed_threshold_kmh=args.non_moving_speed_threshold_kmh,
                         non_moving_perimeter_m=args.non_moving_perimeter_m,
+                        include_quantiles=args.quantiles,
                     )
                     continue
 
@@ -370,6 +388,7 @@ def main(argv: list[str] | None = None) -> int:
                     power_hist_bins=args.power_hist_bins,
                     non_moving_speed_threshold_kmh=args.non_moving_speed_threshold_kmh,
                     non_moving_perimeter_m=args.non_moving_perimeter_m,
+                    include_quantiles=args.quantiles,
                 )
 
         if not args.no_stdout:
@@ -401,6 +420,7 @@ def main(argv: list[str] | None = None) -> int:
             "power_zone_tabs": power_zone_tabs,
             "hr_hist_bins": args.hr_hist_bins,
             "power_hist_bins": args.power_hist_bins,
+            "quantiles": args.quantiles,
             "absolute_timezone": args.absolute_timezone,
             "non_moving_speed_threshold_kmh": args.non_moving_speed_threshold_kmh,
             "non_moving_perimeter_m": args.non_moving_perimeter_m,
@@ -428,6 +448,7 @@ def main(argv: list[str] | None = None) -> int:
                     power_zone_tabs=power_zone_tabs,
                     hr_hist_bins=args.hr_hist_bins,
                     power_hist_bins=args.power_hist_bins,
+                    quantiles=args.quantiles,
                     absolute_timezone=args.absolute_timezone,
                     non_moving_speed_threshold_kmh=args.non_moving_speed_threshold_kmh,
                     non_moving_perimeter_m=args.non_moving_perimeter_m,
@@ -492,7 +513,7 @@ def _load_preset_defaults(paths: list[str]) -> dict[str, Any]:
 
 
 def _validate_preset_types(preset: dict[str, Any], source: str) -> None:
-    for key in ("bw", "no_stdout"):
+    for key in ("bw", "no_stdout", "quantiles"):
         if key in preset and not isinstance(preset[key], bool):
             raise ValueError(f"Preset key '{key}' must be boolean in {source}.")
 
@@ -659,6 +680,7 @@ def _build_effective_preset(
     power_zone_tabs: list[float] | None,
     hr_hist_bins: int | None,
     power_hist_bins: int | None,
+    quantiles: bool,
     absolute_timezone: str,
     non_moving_speed_threshold_kmh: float,
     non_moving_perimeter_m: float,
@@ -679,6 +701,7 @@ def _build_effective_preset(
         "absolute_timezone": absolute_timezone,
         "non_moving_speed_threshold_kmh": non_moving_speed_threshold_kmh,
         "non_moving_perimeter_m": non_moving_perimeter_m,
+        "quantiles": quantiles,
         "bw": bw,
         "no_stdout": no_stdout,
     }

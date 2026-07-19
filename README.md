@@ -25,6 +25,7 @@ CLI tool to identify top interval windows for **power**, **hr**, **power-max**, 
 - Speed minimum/median/average/maximum per interval
 - Non-moving elapsed time per interval (speed + perimeter filter)
 - HR/power min/median/avg/max statistics
+- Optional speed/HR/power Q10/Q25/Q75/Q90 statistics
 - HR/power histograms by:
   - profile-defined zones (when present in file)
   - custom zone tabs
@@ -101,6 +102,7 @@ Preset example:
   "power_zone_tabs": [150, 220, 280],
   "hr_hist_bins": 6,
   "power_hist_bins": 8,
+  "quantiles": true,
   "no_stdout": true,
   "json_out": "out/report.json"
 }
@@ -156,7 +158,8 @@ bike-intervals ride.fit \
 - `--inner-intlen`:
   - Inner floating windows for nested max-average values
   - Comma-separated values only
-  - Default is `[10]`
+  - Defaults to `00:10,01:00,08:00,10:00,12:00,15:00`, filtered so values do not exceed `--duration`
+  - Explicit values override the defaults and are not filtered against `--duration`
   - Pass `--inner-intlen` with no value for an empty list
 - `--slope-window-m`:
   - Floating distance window length in meters for slope calculation
@@ -171,6 +174,9 @@ bike-intervals ride.fit \
   - Number of bins for heart-rate histogram
 - `--power-hist-bins`:
   - Number of bins for power histogram
+- `--quantiles`:
+  - Include weighted Q10, Q25, Q75, and Q90 statistics for speed, power, and heart rate
+  - `--no-quantiles` explicitly disables them, including when enabled by a preset
 - `--absolute-timezone {local,utc,file}`:
   - Controls displayed absolute times in text output
 - `--non-moving-speed-threshold-kmh`:
@@ -208,6 +214,7 @@ Each identified interval includes:
 - non-moving elapsed time in seconds
 - power minimum/median/average/maximum
 - heart-rate minimum/median/average/maximum
+- optional speed/power/heart-rate Q10/Q25/Q75/Q90 values (`--quantiles`)
 - heart-rate histogram by profile zones (if available)
 - heart-rate histogram by custom zone tabs (if provided)
 - heart-rate histogram by fixed bin count (if provided)

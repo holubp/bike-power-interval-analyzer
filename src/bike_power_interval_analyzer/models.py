@@ -88,6 +88,9 @@ class IntervalStats:
     median_heart_rate_bpm: float | None
     average_heart_rate_bpm: float | None
     maximum_heart_rate_bpm: float | None
+    speed_quantiles_kmh: Mapping[str, float | None] = field(default_factory=dict)
+    power_quantiles_w: Mapping[str, float | None] = field(default_factory=dict)
+    heart_rate_quantiles_bpm: Mapping[str, float | None] = field(default_factory=dict)
     heart_rate_hist_profile_zones: Mapping[str, float] = field(default_factory=dict)
     heart_rate_hist_cmd_zones: Mapping[str, float] = field(default_factory=dict)
     heart_rate_hist_bins: Mapping[str, float] = field(default_factory=dict)

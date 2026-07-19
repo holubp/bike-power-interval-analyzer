@@ -143,6 +143,7 @@ def test_cli_writes_json_csv_and_gpx(tmp_path: Path) -> None:
             "4",
             "--power-hist-bins",
             "5",
+            "--quantiles",
             "--no-stdout",
             "--csv-out",
             str(csv_out),
@@ -168,6 +169,9 @@ def test_cli_writes_json_csv_and_gpx(tmp_path: Path) -> None:
     assert "ascent_m" in first
     assert "heart_rate_hist_cmd_zones" in first
     assert "minimum_speed_kmh" in first
+    assert "q10_speed_kmh" in first
+    assert "q25_power_w" in first
+    assert "q90_heart_rate_bpm" in first
     assert "non_moving_time_s" in first
 
     csv_text = csv_out.read_text(encoding="utf-8")
@@ -175,6 +179,7 @@ def test_cli_writes_json_csv_and_gpx(tmp_path: Path) -> None:
     assert "inner_power_max_avg_5s" in csv_text
     assert "median_slope_pct" in csv_text
     assert "average_speed_kmh" in csv_text
+    assert "q10_speed_kmh" in csv_text
 
 
 def test_cli_preset_defaults_and_override(tmp_path: Path) -> None:
@@ -192,6 +197,7 @@ def test_cli_preset_defaults_and_override(tmp_path: Path) -> None:
                 "target": "power",
                 "inner_intlen": [6],
                 "slope_window_m": 20,
+                "quantiles": True,
                 "no_stdout": True,
                 "json_out": str(output_json),
             }
@@ -207,6 +213,7 @@ def test_cli_preset_defaults_and_override(tmp_path: Path) -> None:
             "2",
             "--target",
             "power,hr",
+            "--no-quantiles",
         ]
     )
     assert exit_code == 0
@@ -216,6 +223,8 @@ def test_cli_preset_defaults_and_override(tmp_path: Path) -> None:
     assert payload["duration_s"] == 12
     assert payload["count"] == 2
     assert payload["target"] == "power,hr"
+    assert payload["quantiles"] is False
+    assert "q10_power_w" not in payload["results"]["power"][0]
     assert set(payload["results"].keys()) == {"power", "hr"}
 
 
@@ -254,6 +263,7 @@ def test_cli_write_preset_exports_effective_config(tmp_path: Path) -> None:
             "4",
             "--power-hist-bins",
             "5",
+            "--quantiles",
             "--absolute-timezone",
             "utc",
             "--non-moving-speed-threshold-kmh",
@@ -281,6 +291,7 @@ def test_cli_write_preset_exports_effective_config(tmp_path: Path) -> None:
     assert preset_payload["power_zone_tabs"] == [190.0, 250.0]
     assert preset_payload["hr_hist_bins"] == 4
     assert preset_payload["power_hist_bins"] == 5
+    assert preset_payload["quantiles"] is True
     assert preset_payload["absolute_timezone"] == "utc"
     assert preset_payload["non_moving_speed_threshold_kmh"] == 2.5
     assert preset_payload["non_moving_perimeter_m"] == 15.0
@@ -502,6 +513,7 @@ def test_cli_stdout_stat_middle_values_are_sorted_numerically(
             "1",
             "--target",
             "power",
+            "--quantiles",
             "--bw",
         ]
     )
@@ -511,9 +523,20 @@ def test_cli_stdout_stat_middle_values_are_sorted_numerically(
 
     for prefix in ("  speed=", "  power=", "  hr="):
         line = next(line for line in output_text.splitlines() if line.startswith(prefix))
-        items = re.findall(r"(min|med|avg|max):(-?\d+(?:\.\d+)?)", line)
-        assert len(items) == 4
-        assert items[0][0] == "min"
-        assert items[-1][0] == "max"
-        assert {items[1][0], items[2][0]} == {"med", "avg"}
-        assert float(items[1][1]) <= float(items[2][1])
+        items = re.findall(
+            r"(min|Q10|Q25|med|avg|Q75|Q90|max):(-?\d+(?:\.\d+)?)",
+            line,
+        )
+        assert {label for label, _ in items} == {
+            "min",
+            "Q10",
+            "Q25",
+            "med",
+            "avg",
+            "Q75",
+            "Q90",
+            "max",
+        }
+        assert [float(value) for _, value in items] == sorted(
+            float(value) for _, value in items
+        )

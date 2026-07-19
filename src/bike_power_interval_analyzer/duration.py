@@ -3,6 +3,9 @@
 from __future__ import annotations
 
 
+DEFAULT_INNER_INTERVAL_LENGTHS_S = (10.0, 60.0, 480.0, 600.0, 720.0, 900.0)
+
+
 def parse_duration_to_seconds(raw: str) -> float:
     """Parse duration text into seconds.
 
@@ -72,11 +75,15 @@ def parse_duration_to_seconds(raw: str) -> float:
     return total
 
 
-def parse_inner_interval_lengths(values: list[object] | None) -> list[float]:
+def parse_inner_interval_lengths(
+    values: list[object] | None,
+    maximum_duration_s: float | None = None,
+) -> list[float]:
     """Parse ``--inner-intlen`` values into positive seconds.
 
     Args:
         values: Raw values from CLI. ``None`` means default should be used.
+        maximum_duration_s: Optional duration used to trim only the default values.
 
     Returns:
         Parsed list of inner interval lengths in seconds.
@@ -84,8 +91,16 @@ def parse_inner_interval_lengths(values: list[object] | None) -> list[float]:
     Raises:
         ValueError: If any provided value is invalid.
     """
+    if maximum_duration_s is not None and maximum_duration_s <= 0:
+        raise ValueError(
+            f"maximum_duration_s must be > 0 when provided, got {maximum_duration_s}."
+        )
     if values is None:
-        return [10.0]
+        return [
+            value
+            for value in DEFAULT_INNER_INTERVAL_LENGTHS_S
+            if maximum_duration_s is None or value <= maximum_duration_s + 1e-9
+        ]
     if len(values) == 0:
         return []
 

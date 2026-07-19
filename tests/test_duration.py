@@ -29,9 +29,25 @@ def test_parse_duration_invalid_inputs() -> None:
 
 
 def test_parse_inner_lengths_defaults_and_empty() -> None:
-    assert parse_inner_interval_lengths(None) == [10.0]
+    assert parse_inner_interval_lengths(None) == [
+        10.0,
+        60.0,
+        480.0,
+        600.0,
+        720.0,
+        900.0,
+    ]
+    assert parse_inner_interval_lengths(None, maximum_duration_s=600.0) == [
+        10.0,
+        60.0,
+        480.0,
+        600.0,
+    ]
     assert parse_inner_interval_lengths([]) == []
     assert parse_inner_interval_lengths(["5", "00:20"]) == [5.0, 20.0]
+    assert parse_inner_interval_lengths(["15:00"], maximum_duration_s=600.0) == [
+        900.0
+    ]
 
 
 def test_parse_inner_lengths_reject_empty_string() -> None:
