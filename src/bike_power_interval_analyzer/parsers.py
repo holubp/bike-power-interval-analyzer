@@ -14,6 +14,10 @@ import zipfile
 from .models import ActivityData, DataPoint, StoredInterval
 
 
+METRIC_GAP_FILL_MAX_DURATION_S = 1.0
+METRIC_VALUE_EPSILON = 1e-9
+
+
 def parse_activity_file(path: str) -> ActivityData:
     """Parse TCX or FIT file into normalized activity data.
 
@@ -328,6 +332,7 @@ def _normalize_points(
 
     # Ensure all points reference the canonical elapsed values from the sorted list.
     points = [replace(p, elapsed_s=(p.timestamp - start_time).total_seconds()) for p in points]
+    points = _fill_short_equal_metric_gaps(points)
     activity_duration_s = points[-1].elapsed_s
     stored_intervals = _normalize_stored_intervals(
         start_time=start_time,
@@ -343,6 +348,42 @@ def _normalize_points(
         power_zone_tabs_w=power_zone_tabs_w,
         stored_intervals=stored_intervals,
     )
+
+
+def _fill_short_equal_metric_gaps(points: list[DataPoint]) -> list[DataPoint]:
+    """Fill one-second internal metric gaps bounded by equal measurements."""
+    repaired = list(points)
+    for attribute in ("power_w", "heart_rate_bpm"):
+        index = 1
+        while index < len(repaired) - 1:
+            if getattr(repaired[index], attribute) is not None:
+                index += 1
+                continue
+
+            gap_start = index
+            while index < len(repaired) and getattr(repaired[index], attribute) is None:
+                index += 1
+            gap_end = index
+            if gap_end >= len(repaired):
+                break
+
+            left_value = getattr(repaired[gap_start - 1], attribute)
+            right_value = getattr(repaired[gap_end], attribute)
+            gap_duration_s = (
+                repaired[gap_end].elapsed_s - repaired[gap_start].elapsed_s
+            )
+            if (
+                left_value is not None
+                and right_value is not None
+                and gap_duration_s <= METRIC_GAP_FILL_MAX_DURATION_S + METRIC_VALUE_EPSILON
+                and abs(left_value - right_value) <= METRIC_VALUE_EPSILON
+            ):
+                for repair_index in range(gap_start, gap_end):
+                    repaired[repair_index] = replace(
+                        repaired[repair_index], **{attribute: left_value}
+                    )
+
+    return repaired
 
 
 def _merge_same_timestamp_points(left: dict[str, Any], right: dict[str, Any]) -> dict[str, Any]:

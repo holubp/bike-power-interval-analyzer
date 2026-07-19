@@ -257,5 +257,6 @@ Test suite covers:
 ## Notes
 
 - FIT parsing uses `fitdecode`.
+- Isolated metric gaps of at most one second are filled only when equal valid values bound the gap.
 - Average metric calculations require full metric coverage for each interval.
 - GPX export requires available GPS coordinates within identified intervals.

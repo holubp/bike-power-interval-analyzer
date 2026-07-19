@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from datetime import datetime, timedelta, timezone
 import json
 from pathlib import Path
 import re
@@ -7,7 +8,8 @@ import re
 import pytest
 
 from bike_power_interval_analyzer.cli import main
-from bike_power_interval_analyzer.parsers import parse_tcx
+from bike_power_interval_analyzer.intervals import identify_top_intervals
+from bike_power_interval_analyzer.parsers import _normalize_points, parse_tcx
 
 
 def _write_tcx(path: Path) -> None:
@@ -112,6 +114,64 @@ def test_parse_tcx(tmp_path: Path) -> None:
     assert activity.points[10].power_w == 320
     assert activity.points[20].heart_rate_bpm == 170
     assert len(activity.stored_intervals) == 1
+
+
+def test_normalization_fills_only_short_equal_metric_gaps() -> None:
+    start = datetime(2025, 1, 1, 12, 0, 0, tzinfo=timezone.utc)
+    elapsed_values = [0, 1, 2, 3, 4, 5, 6, 7, 8, 10]
+    powers = [100.0, None, 100.0, 0.0, None, 20.0, 0.0, 50.0, None, 50.0]
+    heart_rates = [
+        180.0,
+        180.0,
+        180.0,
+        100.0,
+        100.0,
+        100.0,
+        100.0,
+        100.0,
+        100.0,
+        100.0,
+    ]
+    raw_points = [
+        {
+            "timestamp": start + timedelta(seconds=elapsed_values[index]),
+            "distance_m": float(elapsed_values[index]),
+            "power_w": power,
+            "heart_rate_bpm": heart_rates[index],
+            "latitude_deg": None,
+            "longitude_deg": None,
+            "elevation_m": None,
+        }
+        for index, power in enumerate(powers)
+    ]
+
+    activity = _normalize_points("synthetic", raw_points)
+
+    assert activity.points[1].power_w == pytest.approx(100.0)
+    assert activity.points[4].power_w is None
+    assert activity.points[8].power_w is None
+
+    power_interval = identify_top_intervals(
+        activity=activity,
+        duration_s=3.0,
+        max_overlap_ratio=0.0,
+        count=1,
+        analyzed_metric="power",
+        inner_interval_lengths_s=[],
+    )[0]
+    hr_interval = identify_top_intervals(
+        activity=activity,
+        duration_s=3.0,
+        max_overlap_ratio=0.0,
+        count=1,
+        analyzed_metric="heart_rate",
+        inner_interval_lengths_s=[],
+    )[0]
+
+    assert power_interval.start_s == pytest.approx(0.0)
+    assert hr_interval.start_s == pytest.approx(0.0)
+    assert power_interval.average_power_w == pytest.approx(100.0)
+    assert hr_interval.average_power_w == pytest.approx(100.0)
 
 
 def test_cli_writes_json_csv_and_gpx(tmp_path: Path) -> None:

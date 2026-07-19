@@ -785,10 +785,15 @@ def _compute_interval_stats(
     hr_samples = _metric_samples(prepared, "heart_rate", start_s, end_s)
     speed_samples = _speed_samples(prepared, start_s, end_s)
 
-    min_power, med_power, avg_power, max_power, power_quantiles = _weighted_summary(
+    average_power = _metric_average(prepared, "power", start_s, end_s, require_full=True)
+    average_hr = _metric_average(
+        prepared, "heart_rate", start_s, end_s, require_full=True
+    )
+
+    min_power, med_power, _, max_power, power_quantiles = _weighted_summary(
         power_samples, include_quantiles
     )
-    min_hr, med_hr, avg_hr, max_hr, hr_quantiles = _weighted_summary(
+    min_hr, med_hr, _, max_hr, hr_quantiles = _weighted_summary(
         hr_samples, include_quantiles
     )
     min_speed, med_speed, avg_speed, max_speed, speed_quantiles = _weighted_summary(
@@ -861,11 +866,11 @@ def _compute_interval_stats(
         non_moving_perimeter_m=non_moving_perimeter_m,
         minimum_power_w=min_power,
         median_power_w=med_power,
-        average_power_w=avg_power,
+        average_power_w=average_power,
         maximum_power_w=max_power,
         minimum_heart_rate_bpm=min_hr,
         median_heart_rate_bpm=med_hr,
-        average_heart_rate_bpm=avg_hr,
+        average_heart_rate_bpm=average_hr,
         maximum_heart_rate_bpm=max_hr,
         speed_quantiles_kmh=speed_quantiles,
         power_quantiles_w=power_quantiles,

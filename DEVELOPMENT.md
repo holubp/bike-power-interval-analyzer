@@ -46,5 +46,6 @@ pytest -q
 - FIT profile zones can be extracted from `time_in_zone` boundaries.
 - Fixed-duration `power`/`hr` search evaluates continuous starts at metric-boundary breakpoints, so it is not limited to sampled start timestamps.
 - `power-max` and `hr-max` use a minimum-duration search and compare overlap against the shorter selected interval.
-- Summary min/median/average/max and optional quantiles use the same duration-weighted available sample set.
+- Min/median/max and optional quantiles use available weighted samples; averages require full metric coverage so values remain comparable with ranked candidates.
+- Parser normalization fills only metric gaps up to one second when equal valid values bound the gap.
 - Default inner windows are duration-aware; explicit `--inner-intlen` values remain unfiltered overrides.

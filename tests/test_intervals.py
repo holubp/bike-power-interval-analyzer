@@ -9,6 +9,7 @@ from bike_power_interval_analyzer.intervals import (
     identify_top_intervals_at_least_duration,
 )
 from bike_power_interval_analyzer.models import ActivityData, DataPoint
+from bike_power_interval_analyzer.output import render_text_report
 
 
 def _build_activity() -> ActivityData:
@@ -296,7 +297,7 @@ def test_extended_stats_and_histograms() -> None:
     assert sum(first.power_hist_cmd_zones.values()) == pytest.approx(first.duration_s)
 
 
-def test_summary_average_uses_available_cross_metric_samples() -> None:
+def test_summary_average_requires_full_cross_metric_coverage() -> None:
     activity = _build_activity()
     modified = list(activity.points)
     for index in range(25, 30):
@@ -326,7 +327,13 @@ def test_summary_average_uses_available_cross_metric_samples() -> None:
         inner_interval_lengths_s=[],
     )
 
-    assert intervals[0].average_heart_rate_bpm == pytest.approx(145.0)
+    assert intervals[0].average_heart_rate_bpm is None
+    report = render_text_report({"power": intervals}, color=False)
+    hr_line = next(line for line in report.splitlines() if line.startswith("  hr="))
+    assert "min:" in hr_line
+    assert "med:" in hr_line
+    assert "max:" in hr_line
+    assert "avg:n/a" in hr_line
 
 
 def test_duplicate_tabs_rejected() -> None:
